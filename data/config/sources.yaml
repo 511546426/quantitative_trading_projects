@@ -1,0 +1,67 @@
+sources:
+  tushare:
+    enabled: true
+    priority: 1
+    token: "${TUSHARE_TOKEN:-}"
+    rate_limit:
+      capacity: 10
+      refill_rate: 3.0
+    retry:
+      max_retries: 3
+      backoff: [1, 2, 4]
+    timeout: 30
+    capabilities:
+      - daily_bars
+      - adj_factor
+      - stock_list
+      - financial_indicator
+      - valuation
+      - dividend
+      - index_daily
+      - trade_calendar
+
+  akshare:
+    enabled: true
+    priority: 2
+    rate_limit:
+      capacity: 2
+      refill_rate: 1.0
+    retry:
+      max_retries: 2
+      backoff: [2, 5]
+    timeout: 30
+    capabilities:
+      - north_flow
+      - dragon_tiger
+      - margin_trading
+      - daily_bars
+      - stock_list
+
+  baostock:
+    enabled: true
+    priority: 3
+    rate_limit:
+      capacity: 5
+      refill_rate: 2.0
+    retry:
+      max_retries: 2
+      backoff: [1, 3]
+    timeout: 30
+    capabilities:
+      - daily_bars
+      - adj_factor
+      - stock_list
+
+  qmt:
+    enabled: false
+    priority: 0
+    capabilities:
+      - realtime_quote
+
+fallback:
+  daily_bars: [tushare, baostock]
+  stock_list: [tushare, baostock]
+  adj_factor: [tushare, baostock]
+  financial_indicator: [tushare]
+  valuation: [tushare]
+  index_daily: [tushare]

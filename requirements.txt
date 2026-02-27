@@ -1,0 +1,30 @@
+# A股量化交易系统 · Python 依赖
+# pip install -r requirements.txt
+
+# === 数据源 SDK ===
+tushare>=1.4.2
+akshare>=1.14.0
+baostock>=0.8.8
+
+# === 数据存储 ===
+clickhouse-driver>=0.2.9
+psycopg2-binary>=2.9.9
+redis>=5.0.0
+
+# === 数据处理 ===
+pandas>=2.1.0
+numpy>=1.26.0
+
+# === 配置管理 ===
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# === 调度 ===
+apscheduler>=3.10.4
+
+# === 日志 ===
+loguru>=0.7.2
+
+# === 开发/测试 ===
+pytest>=8.0.0
+pytest-cov>=4.1.0

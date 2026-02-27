@@ -1,0 +1,39 @@
+schedules:
+  daily_price:
+    cron: "30 15 * * 1-5"
+    task: "daily_pipeline.update_price"
+    timeout_minutes: 30
+    retry:
+      max_retries: 3
+      backoff_seconds: [60, 300, 900]
+    depends_on: []
+
+  daily_valuation:
+    cron: "0 16 * * 1-5"
+    task: "daily_pipeline.update_valuation"
+    timeout_minutes: 20
+    retry:
+      max_retries: 3
+      backoff_seconds: [60, 300, 900]
+    depends_on: [daily_price]
+
+  weekly_financial:
+    cron: "0 18 * * 1"
+    task: "daily_pipeline.update_financial"
+    timeout_minutes: 60
+    retry:
+      max_retries: 2
+      backoff_seconds: [120, 600]
+    depends_on: []
+
+  quality_report:
+    cron: "0 17 * * 1-5"
+    task: "quality.generate_report"
+    timeout_minutes: 10
+    depends_on: [daily_price, daily_valuation]
+
+  stock_list_sync:
+    cron: "0 9 1 * *"
+    task: "daily_pipeline.sync_stock_list"
+    timeout_minutes: 10
+    depends_on: []
