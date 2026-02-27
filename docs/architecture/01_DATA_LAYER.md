@@ -233,6 +233,22 @@ class DataQualityChecker:
 
 ---
 
+## 详细设计文档
+
+数据获取模块的完整架构设计见：[data_fetcher/](data_fetcher/)
+
+| 文档 | 说明 |
+|------|------|
+| [00_OVERVIEW.md](data_fetcher/00_OVERVIEW.md) | 模块全景、目录结构、实现优先级 |
+| [01_FETCHER_DESIGN.md](data_fetcher/01_FETCHER_DESIGN.md) | 采集层（接口、适配器、限频、降级） |
+| [02_CLEANER_DESIGN.md](data_fetcher/02_CLEANER_DESIGN.md) | 清洗层（复权、停牌、涨跌停、PIT 对齐） |
+| [03_WRITER_DESIGN.md](data_fetcher/03_WRITER_DESIGN.md) | 写入层（幂等写入、表结构、连接池） |
+| [04_PIPELINE_DESIGN.md](data_fetcher/04_PIPELINE_DESIGN.md) | 流水线编排（每日更新、回填、调度） |
+| [05_QUALITY_DESIGN.md](data_fetcher/05_QUALITY_DESIGN.md) | 数据质量体系（检查规则、告警） |
+| [06_CONFIG_AND_MODELS.md](data_fetcher/06_CONFIG_AND_MODELS.md) | 配置管理、数据模型、环境变量 |
+
+---
+
 ## 本阶段交付物
 
 - [ ] Tushare 数据获取脚本（日K线/基本面）
