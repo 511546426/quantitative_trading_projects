@@ -1,0 +1,43 @@
+project:
+  name: "quant_trading"
+  env: "dev"
+
+database:
+  clickhouse:
+    host: "${CH_HOST:-localhost}"
+    port: "${CH_PORT:-9000}"
+    database: "quant"
+    user: "${CH_USER:-default}"
+    password: "${CH_PASSWORD:-}"
+    pool_size: 10
+
+  postgres:
+    host: "${PG_HOST:-localhost}"
+    port: "${PG_PORT:-5432}"
+    database: "quant"
+    user: "${PG_USER:-postgres}"
+    password: "${PG_PASSWORD:-}"
+    pool_size: 10
+
+  redis:
+    host: "${REDIS_HOST:-localhost}"
+    port: "${REDIS_PORT:-6379}"
+    db: 0
+    password: "${REDIS_PASSWORD:-}"
+    pool_size: 20
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+  file: "logs/data_pipeline.log"
+  rotation: "10 MB"
+  retention: 30
+
+notification:
+  email:
+    enabled: false
+    smtp_host: ""
+    recipients: []
+  wechat:
+    enabled: false
+    webhook_url: "${WECHAT_WEBHOOK:-}"
