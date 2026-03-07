@@ -10,6 +10,7 @@ data/cache/
 
 # 日志
 logs/
+execution/state/
 *.log
 
 # Python
