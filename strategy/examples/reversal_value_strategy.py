@@ -282,7 +282,7 @@ def main():
 
     m = calc_full_metrics(net_ret, turnover)
 
-    # ── 报告 ──
+    # ── 文字报告 ──
     print("\n" + format_report(m))
 
     print("\n── 逐年收益 ──")
@@ -301,6 +301,19 @@ def main():
     for cap in [100_000, 200_000, 300_000, 500_000]:
         c = cap * ann_turn * (BUY_COST_BPS + SELL_COST_BPS) / 2 / 1e4
         print(f"  {cap//10000:>3}万本金：年成本约 {c:>6.0f} 元 ({c/cap:.1%})")
+
+    # ── 可视化报告 ──
+    logger.info("生成可视化报告...")
+    try:
+        from strategy.backtest.visualizer import plot_report
+        plot_report(
+            net_returns   = net_ret,
+            title         = f"A股反转策略  {START[:4]}~{END[:4]}",
+            save_path     = "docs/reports/reversal_strategy.png",
+            initial_capital = 1.0,
+        )
+    except Exception as e:
+        logger.warning("可视化报告生成失败: %s", e)
 
     ch.close()
     pg.close()
