@@ -24,6 +24,15 @@
 /home/lcw/quantitative_trading_projects/run_daily.sh
 ```
 
+### 通过总控脚本执行（推荐）
+
+如果你希望把“起容器/每日更新/回填/看日志”都统一到一个入口，使用 `ops.sh`：
+
+```bash
+cd /home/lcw/quantitative_trading_projects
+./ops.sh daily
+```
+
 ### 执行“更新指定日期”（可选）
 
 日期格式：`YYYYMMDD`
@@ -86,6 +95,13 @@ tail -50 /home/lcw/quantitative_trading_projects/scripts/daily_update.log
 
 ```bash
 tail -f /home/lcw/quantitative_trading_projects/scripts/daily_update.log
+```
+
+也可以通过总控脚本跟踪日志：
+
+```bash
+cd /home/lcw/quantitative_trading_projects
+./ops.sh logs daily
 ```
 
 ## 本次每日更新会写入哪些表
