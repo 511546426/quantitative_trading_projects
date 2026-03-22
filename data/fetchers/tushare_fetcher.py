@@ -42,8 +42,8 @@ class TushareFetcher(BaseFetcher):
     def connect(self) -> None:
         try:
             import tushare as ts
-            ts.set_token(self._token)
-            self._api = ts.pro_api()
+            # 直接传入 token，避免 set_token 写入 ~/tk.csv 导致的权限问题
+            self._api = ts.pro_api(token=self._token)
             self._connected = True
             logger.info("Tushare Pro 连接成功")
         except Exception as e:

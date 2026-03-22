@@ -29,9 +29,15 @@ cd /home/lcw/quantitative_trading_projects
 ./ops.sh web 8502
 ```
 
-首次使用需安装依赖：`pip install streamlit`
+安装依赖（需 Streamlit ≥ 1.33，以支持回填后台运行与日志定时刷新）：
+
+```bash
+pip install -r requirements.txt
+```
 
 浏览器访问：`http://127.0.0.1:8501`
+
+**说明**：日K/估值回填在 Web 上为**后台进程**启动，页面不会长时间卡在转圈；进度见「回填实时进度」或下方「查看日志」。若端口占用，换端口：`./ops.sh web 8502`。
 
 ---
 

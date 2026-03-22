@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,9 +22,35 @@ LOGS = {
     "backfill-valuation": PROJECT_DIR / "scripts" / "backfill_valuation.log",
 }
 
-# 短任务超时(秒)，长任务(回填)超时
+# 短任务超时(秒)
 TIMEOUT_SHORT = 120
-TIMEOUT_BACKFILL = 7200  # 2 小时
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def start_backfill_background(cmd: str) -> int | None:
+    """后台启动 ops.sh 子命令，返回子进程 PID；失败返回 None。"""
+    argv = ["/bin/bash", str(OPS_SH), cmd]
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(PROJECT_DIR),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={**os.environ, "PATH": os.environ.get("PATH", "")},
+        )
+        return proc.pid
+    except OSError:
+        return None
 
 
 def run_ops(cmd: str, *args: str, timeout: int = TIMEOUT_SHORT) -> tuple[int, str]:
@@ -67,6 +94,35 @@ def main() -> None:
     st.title("量化运维控制台")
     st.caption(f"项目目录: `{PROJECT_DIR}`")
 
+    if "log_refresh_ver" not in st.session_state:
+        st.session_state["log_refresh_ver"] = 0
+    if "backfill_pid" not in st.session_state:
+        st.session_state["backfill_pid"] = None
+    if "backfill_log_key" not in st.session_state:
+        st.session_state["backfill_log_key"] = None
+
+    bp = st.session_state.get("backfill_pid")
+    if bp and not _pid_alive(bp):
+        st.session_state["backfill_pid"] = None
+        st.session_state["backfill_log_key"] = None
+
+    @st.fragment(run_every=3)
+    def _live_backfill_log() -> None:
+        pid = st.session_state.get("backfill_pid")
+        lk = st.session_state.get("backfill_log_key")
+        if not pid or not lk:
+            return
+        if not _pid_alive(pid):
+            st.session_state["backfill_pid"] = None
+            st.session_state["backfill_log_key"] = None
+            st.session_state["log_refresh_ver"] = int(
+                st.session_state.get("log_refresh_ver", 0)
+            ) + 1
+            st.success("回填进程已结束。请在下方「查看日志」选择对应文件查看完整日志。")
+            return
+        st.caption(f"回填进行中 · PID **{pid}** · 每 3 秒刷新")
+        st.code(read_log_tail(lk, 150), language="text")
+
     # 输出展示区（所有按钮的结果都写到这里）
     output_placeholder = st.empty()
 
@@ -104,31 +160,69 @@ def main() -> None:
         if st.button("执行每日更新", key="daily"):
             with st.spinner("更新中，请稍候..."):
                 code, out = run_ops("daily", date_arg) if date_arg.strip() else run_ops("daily")
+            st.session_state["log_refresh_ver"] = int(
+                st.session_state.get("log_refresh_ver", 0)
+            ) + 1
             with output_placeholder.container():
                 st.code(out, language="text")
                 st.caption(f"退出码: {code}")
+                log_content = read_log_tail("daily", lines=150)
+                st.markdown("**最新日志 (daily_update.log)：**")
+                st.code(log_content, language="text")
 
-    # 历史回填
+    # 历史回填（后台进程 + 定时刷新，避免整页卡死）
     st.subheader("历史回填")
-    st.warning("回填任务耗时长（数十分钟），执行期间请勿关闭页面。")
+    st.warning(
+        "回填可能需数十分钟。任务在**后台**运行，页面可继续操作；"
+        "请勿同时点两个回填。关闭浏览器不会停止任务（进程仍在服务器上跑）。"
+    )
     b1, b2 = st.columns(2)
     with b1:
         if st.button("回填日K线", key="backfill-daily"):
-            with st.spinner("回填中，请耐心等待..."):
-                code, out = run_ops("backfill-daily", timeout=TIMEOUT_BACKFILL)
-            with output_placeholder.container():
-                st.code(out, language="text")
-                st.caption(f"退出码: {code}")
+            if st.session_state.get("backfill_pid") and _pid_alive(
+                st.session_state["backfill_pid"]
+            ):
+                st.error("已有回填任务在运行，请等待结束或到终端用 ps/kill 处理。")
+            else:
+                pid = start_backfill_background("backfill-daily")
+                if pid is None:
+                    st.error("启动失败，请检查终端权限与 ops.sh。")
+                else:
+                    st.session_state["backfill_pid"] = pid
+                    st.session_state["backfill_log_key"] = "backfill-daily"
+                    st.session_state["log_refresh_ver"] = int(
+                        st.session_state.get("log_refresh_ver", 0)
+                    ) + 1
+                    with output_placeholder.container():
+                        st.success(f"已在后台启动日K线回填 · PID `{pid}`")
     with b2:
         if st.button("回填估值数据", key="backfill-valuation"):
-            with st.spinner("回填中，请耐心等待..."):
-                code, out = run_ops("backfill-valuation", timeout=TIMEOUT_BACKFILL)
-            with output_placeholder.container():
-                st.code(out, language="text")
-                st.caption(f"退出码: {code}")
+            if st.session_state.get("backfill_pid") and _pid_alive(
+                st.session_state["backfill_pid"]
+            ):
+                st.error("已有回填任务在运行，请等待结束或到终端用 ps/kill 处理。")
+            else:
+                pid = start_backfill_background("backfill-valuation")
+                if pid is None:
+                    st.error("启动失败，请检查终端权限与 ops.sh。")
+                else:
+                    st.session_state["backfill_pid"] = pid
+                    st.session_state["backfill_log_key"] = "backfill-valuation"
+                    st.session_state["log_refresh_ver"] = int(
+                        st.session_state.get("log_refresh_ver", 0)
+                    ) + 1
+                    with output_placeholder.container():
+                        st.success(f"已在后台启动估值回填 · PID `{pid}`")
 
-    # 查看日志
+    if st.session_state.get("backfill_pid") and _pid_alive(
+        st.session_state["backfill_pid"]
+    ):
+        st.markdown("##### 回填实时进度（日志尾部）")
+        _live_backfill_log()
+
+    # 查看日志 — 使用 st.code 只读展示，避免 st.text_area + key 导致 session_state 不刷新
     st.subheader("查看日志")
+
     log_choice = st.selectbox(
         "选择日志",
         ["daily", "backfill-daily", "backfill-valuation"],
@@ -139,9 +233,15 @@ def main() -> None:
         }[x],
     )
     tail_lines = st.slider("显示最后 N 行", 50, 500, 100)
-    st.button("刷新日志", key="refresh-log")
+    if st.button("刷新日志", key="refresh-log"):
+        st.session_state["log_refresh_ver"] = int(
+            st.session_state.get("log_refresh_ver", 0)
+        ) + 1
+
     content = read_log_tail(log_choice, lines=tail_lines)
-    st.text_area("日志内容", content, height=400, key="log-area")
+    log_path = LOGS.get(log_choice)
+    st.caption(f"当前文件: `{log_path}`")
+    st.code(content, language="text")
 
 
 if __name__ == "__main__":
