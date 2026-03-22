@@ -14,6 +14,9 @@ execution/state/
 .mplconfig/
 *.log
 
+# 回填/任务断点（运行时生成，勿提交）
+scripts/*checkpoint*.json
+
 # Python
 __pycache__/
 *.pyc
