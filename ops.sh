@@ -32,6 +32,8 @@ Commands:
   logs backfill-daily    Tail daily backfill log
   logs backfill-valuation Tail valuation backfill log
 
+  web [port]             Start Streamlit Web 运维界面 (default port 8501)
+
 Examples:
   ./ops.sh status
   ./ops.sh start-db
@@ -263,6 +265,17 @@ main() {
       ;;
     logs)
       tail_logs "${1:-}"
+      ;;
+    web)
+      port="${1:-8501}"
+      py="${PROJECT_DIR}/.venv/bin/python"
+      dash="${PROJECT_DIR}/ui/ops_dashboard.py"
+      if [[ ! -x "${py}" ]] || [[ ! -f "${dash}" ]]; then
+        echo "[ERROR] venv or ui/ops_dashboard.py not found" >&2
+        exit 1
+      fi
+      echo "[INFO] 启动 Web 运维界面: http://127.0.0.1:${port}"
+      exec "${py}" -m streamlit run "${dash}" --server.port "${port}" --server.address 127.0.0.1
       ;;
     *)
       echo "[ERROR] unknown command: ${cmd}" >&2

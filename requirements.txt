@@ -28,6 +28,9 @@ apscheduler>=3.10.4
 # === 日志 ===
 loguru>=0.7.2
 
+# === 运维 Web 界面 ===
+streamlit>=1.28.0
+
 # === 开发/测试 ===
 pytest>=8.0.0
 pytest-cov>=4.1.0

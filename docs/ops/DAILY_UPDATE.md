@@ -12,6 +12,29 @@
 
 - `/home/lcw/quantitative_trading_projects`
 
+## Web 运维界面
+
+通过浏览器操作：起停容器、每日更新、历史回填、查看日志。
+
+### 启动
+
+```bash
+cd /home/lcw/quantitative_trading_projects
+./ops.sh web
+```
+
+或指定端口：
+
+```bash
+./ops.sh web 8502
+```
+
+首次使用需安装依赖：`pip install streamlit`
+
+浏览器访问：`http://127.0.0.1:8501`
+
+---
+
 ## 一键执行（推荐）
 
 项目已提供一键脚本：`run_daily.sh`
@@ -70,7 +93,7 @@ crontab -e
 推荐配置（工作日 15:35 运行）：
 
 ```cron
-35 15 * * 1-5 /home/lcw/quantitative_trading_projects/run_daily.sh
+35 15 * * 1-5 cd /home/lcw/quantitative_trading_projects && ./ops.sh daily
 ```
 
 说明：
