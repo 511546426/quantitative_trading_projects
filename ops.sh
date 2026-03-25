@@ -9,6 +9,7 @@ DB_CONTAINERS=("clickhouse" "postgres" "redis")
 
 DAILY_LOG="${SCRIPTS_DIR}/daily_update.log"
 BACKFILL_DAILY_LOG="${SCRIPTS_DIR}/backfill_daily.log"
+BACKFILL_INDEX_LOG="${SCRIPTS_DIR}/backfill_index.log"
 BACKFILL_VALUATION_LOG="${SCRIPTS_DIR}/backfill_valuation.log"
 
 ts() { date '+%F %T %Z'; }
@@ -26,10 +27,12 @@ Commands:
 
   daily [YYYYMMDD]       Run daily update (today or given date)
   backfill-daily         Run historical daily bars backfill (checkpointed)
+  backfill-index [START] [END]  Run index_daily backfill (000001/300/905, PG checkpoint)
   backfill-valuation     Run historical valuation backfill (checkpointed)
 
   logs daily             Tail daily update log
   logs backfill-daily    Tail daily backfill log
+  logs backfill-index    Tail index backfill log
   logs backfill-valuation Tail valuation backfill log
 
   web [port]             Start Streamlit Web 运维界面 (default port 8501)
@@ -194,6 +197,32 @@ run_backfill_daily() {
   echo "[OK] backfill-daily finished. log: ${BACKFILL_DAILY_LOG}"
 }
 
+run_backfill_index() {
+  require_project
+  start_db >/dev/null
+
+  local py="${PROJECT_DIR}/.venv/bin/python"
+  local script="${SCRIPTS_DIR}/backfill_index.py"
+  if [[ ! -x "${py}" ]]; then
+    echo "[ERROR] venv python not found: ${py}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${script}" ]]; then
+    echo "[ERROR] script not found: ${script}" >&2
+    exit 1
+  fi
+
+  local start="${1:-20200101}"
+  local end="${2:-}"
+  if [[ -z "${end}" ]]; then
+    end="$(date '+%Y%m%d')"
+  fi
+
+  append_header "${BACKFILL_INDEX_LOG}" "BACKFILL INDEX_DAILY ${start} ~ ${end}"
+  (cd "${PROJECT_DIR}" && "${py}" "${script}" "${start}" "${end}") >> "${BACKFILL_INDEX_LOG}" 2>&1
+  echo "[OK] backfill-index finished. log: ${BACKFILL_INDEX_LOG}"
+}
+
 run_backfill_valuation() {
   require_project
   start_db >/dev/null
@@ -223,12 +252,15 @@ tail_logs() {
     backfill-daily)
       tail -f "${BACKFILL_DAILY_LOG}"
       ;;
+    backfill-index)
+      tail -f "${BACKFILL_INDEX_LOG}"
+      ;;
     backfill-valuation)
       tail -f "${BACKFILL_VALUATION_LOG}"
       ;;
     *)
       echo "[ERROR] unknown logs target: ${which}" >&2
-      echo "        use: daily | backfill-daily | backfill-valuation" >&2
+      echo "        use: daily | backfill-daily | backfill-index | backfill-valuation" >&2
       exit 1
       ;;
   esac
@@ -259,6 +291,9 @@ main() {
       ;;
     backfill-daily)
       run_backfill_daily
+      ;;
+    backfill-index)
+      run_backfill_index "${1:-}" "${2:-}"
       ;;
     backfill-valuation)
       run_backfill_valuation

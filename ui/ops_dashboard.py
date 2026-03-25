@@ -19,6 +19,7 @@ OPS_SH = PROJECT_DIR / "ops.sh"
 LOGS = {
     "daily": PROJECT_DIR / "scripts" / "daily_update.log",
     "backfill-daily": PROJECT_DIR / "scripts" / "backfill_daily.log",
+    "backfill-index": PROJECT_DIR / "scripts" / "backfill_index.log",
     "backfill-valuation": PROJECT_DIR / "scripts" / "backfill_valuation.log",
 }
 
@@ -36,9 +37,11 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def start_backfill_background(cmd: str) -> int | None:
+def start_backfill_background(cmd: str, extra: list[str] | None = None) -> int | None:
     """后台启动 ops.sh 子命令，返回子进程 PID；失败返回 None。"""
     argv = ["/bin/bash", str(OPS_SH), cmd]
+    if extra:
+        argv.extend(extra)
     try:
         proc = subprocess.Popen(
             argv,
@@ -176,7 +179,7 @@ def main() -> None:
         "回填可能需数十分钟。任务在**后台**运行，页面可继续操作；"
         "请勿同时点两个回填。关闭浏览器不会停止任务（进程仍在服务器上跑）。"
     )
-    b1, b2 = st.columns(2)
+    b1, b2, b3 = st.columns(3)
     with b1:
         if st.button("回填日K线", key="backfill-daily"):
             if st.session_state.get("backfill_pid") and _pid_alive(
@@ -196,6 +199,24 @@ def main() -> None:
                     with output_placeholder.container():
                         st.success(f"已在后台启动日K线回填 · PID `{pid}`")
     with b2:
+        if st.button("回填指数日线", key="backfill-index"):
+            if st.session_state.get("backfill_pid") and _pid_alive(
+                st.session_state["backfill_pid"]
+            ):
+                st.error("已有回填任务在运行，请等待结束或到终端用 ps/kill 处理。")
+            else:
+                pid = start_backfill_background("backfill-index")
+                if pid is None:
+                    st.error("启动失败，请检查终端权限与 ops.sh。")
+                else:
+                    st.session_state["backfill_pid"] = pid
+                    st.session_state["backfill_log_key"] = "backfill-index"
+                    st.session_state["log_refresh_ver"] = int(
+                        st.session_state.get("log_refresh_ver", 0)
+                    ) + 1
+                    with output_placeholder.container():
+                        st.success(f"已在后台启动指数回填 · PID `{pid}`（默认 20200101～今日）")
+    with b3:
         if st.button("回填估值数据", key="backfill-valuation"):
             if st.session_state.get("backfill_pid") and _pid_alive(
                 st.session_state["backfill_pid"]
@@ -225,10 +246,11 @@ def main() -> None:
 
     log_choice = st.selectbox(
         "选择日志",
-        ["daily", "backfill-daily", "backfill-valuation"],
+        ["daily", "backfill-daily", "backfill-index", "backfill-valuation"],
         format_func=lambda x: {
             "daily": "每日更新 (daily_update.log)",
             "backfill-daily": "日K线回填 (backfill_daily.log)",
+            "backfill-index": "指数日线回填 (backfill_index.log)",
             "backfill-valuation": "估值回填 (backfill_valuation.log)",
         }[x],
     )
