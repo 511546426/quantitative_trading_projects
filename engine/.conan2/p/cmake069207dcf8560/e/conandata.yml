@@ -1,0 +1,20 @@
+sources:
+  3.31.11:
+    Linux:
+      armv8:
+        sha256: faef5420c3853d0e10a3862a0d3c71b40ffc2de36fc0ef0bcc5c896cf18f240f
+        url: https://cmake.org/files/v3.31/cmake-3.31.11-linux-aarch64.tar.gz
+      x86_64:
+        sha256: d815c10cf54e8e122088b3bb25ea6b4010fb96b7ad6e1ad3fdef75be3d996b0b
+        url: https://cmake.org/files/v3.31/cmake-3.31.11-linux-x86_64.tar.gz
+    Macos:
+      universal:
+        sha256: 8597e25bdbe1c9e11dcd988deb2b6b4c5d236407deadf8874bbbea1412150fcb
+        url: https://cmake.org/files/v3.31/cmake-3.31.11-macos10.10-universal.tar.gz
+    Windows:
+      armv8:
+        sha256: 83b0b87f10f53fc5133f8974f3dc8df0c1af91f254bc5f365de6e1bec6b64eb4
+        url: https://cmake.org/files/v3.31/cmake-3.31.11-windows-arm64.zip
+      x86_64:
+        sha256: 1210542e49be1a88edfcfd7a3c68407804f5e85945509cf1c5eb5470b5e35beb
+        url: https://cmake.org/files/v3.31/cmake-3.31.11-windows-x86_64.zip

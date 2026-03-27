@@ -1,0 +1,10 @@
+patches:
+  0.8.0:
+  - patch_description: Fix compilation error with GCC 15.1
+    patch_file: patches/0003-fix-gcc-15-1.patch
+    patch_source: https://github.com/jbeder/yaml-cpp/pull/1310
+    patch_type: portability
+sources:
+  0.8.0:
+    sha256: fbe74bbdcee21d656715688706da3c8becfd946d92cd44705cc6098bb23b3a16
+    url: https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz

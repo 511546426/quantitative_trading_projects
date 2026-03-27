@@ -1,0 +1,1 @@
+. "/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/build-release/conan/conanbuildenv-release-x86_64.sh" && . "/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/build-release/conan/conanautotoolstoolchain.sh"

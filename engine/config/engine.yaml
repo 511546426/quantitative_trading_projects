@@ -1,0 +1,18 @@
+# QuantEngine 配置文件
+# 修改后重启引擎生效
+
+initial_cash: 20000.0       # 初始资金（元）
+gateway: "mock"             # 可选: mock / xtp / qmt
+
+zmq_endpoint: "ipc:///tmp/quant_signals"   # 与 Python 端 PUSH 地址一致
+log_file: "logs/engine.log"
+
+risk:
+  max_single_position_ratio: 0.10   # 单股最大仓位
+  max_total_position_ratio:  0.95
+  max_order_amount:          500000
+  max_daily_loss_ratio:      0.03
+  max_drawdown_ratio:        0.15
+  min_order_amount:          100
+  max_active_orders_per_sym: 3
+  allow_short:               false

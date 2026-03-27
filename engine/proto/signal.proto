@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package quant.proto;
+
+option optimize_for = SPEED;
+
+// ────────────────────────────────────────────────────────────
+// Signal - Python 策略层向 C++ 引擎发送的目标权重信号
+// ────────────────────────────────────────────────────────────
+message Signal {
+    string symbol          = 1;   // "000001.SZ"
+    double target_weight   = 2;   // 目标权重（0~1）
+    int64  signal_time_ns  = 3;   // 信号生成时间（纳秒）
+    string strategy_id     = 4;   // 策略标识符
+    double ref_price       = 5;   // 参考价格（策略计算时的价格）
+    bool   close_position  = 6;   // true = 清仓该 symbol
+}
+
+// ────────────────────────────────────────────────────────────
+// SignalBatch - 批量信号（一次重平衡）
+// ────────────────────────────────────────────────────────────
+message SignalBatch {
+    repeated Signal signals     = 1;
+    int64 batch_time_ns         = 2;   // 批次时间
+    string strategy_id          = 3;
+    double total_capital        = 4;   // 策略使用的总资金
+    string rebalance_reason     = 5;   // 可选：触发原因（如 "daily_rebalance"）
+}
+
+// ────────────────────────────────────────────────────────────
+// EngineStatus - C++ 引擎回传给 Python 的状态（可选）
+// ────────────────────────────────────────────────────────────
+message EngineStatus {
+    double nav              = 1;
+    double cash             = 2;
+    double daily_pnl        = 3;
+    double max_drawdown     = 4;
+    int64  timestamp_ns     = 5;
+    string status           = 6;   // "running" / "breaker_on" / "error"
+    string error_msg        = 7;
+}

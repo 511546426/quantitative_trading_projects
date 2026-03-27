@@ -1,0 +1,11 @@
+[settings]
+arch=x86_64
+build_type=Release
+compiler=gcc
+compiler.version=11
+os=Linux
+[options]
+PIE=False
+fPIC=True
+shared=False
+use_soname=True

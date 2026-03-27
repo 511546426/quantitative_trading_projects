@@ -1,0 +1,6 @@
+1774620644
+conaninfo.txt: 5e9d98613dfeb99c34096b30890bcbbf
+include/zmq.h: 6839e2e785e98d6e3a5d5516808d859d
+include/zmq_utils.h: cfe25e6fecfe3aba052b1a681b064a2e
+lib/libzmq.a: 10245918e57d021a1887e770cdaaa34c
+licenses/LICENSE: 9741c346eef56131163e13b9db1241b3

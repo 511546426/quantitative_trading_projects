@@ -1,0 +1,24 @@
+crypto_scalarmult/curve25519/sandy2x/libsodium_la-sandy2x.lo: \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/sandy2x.S \
+ /usr/include/stdc-predef.h \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/consts.S \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/consts_namespace.h \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_mul.S \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/include/sodium/private/asm_cet.h \
+ /usr/lib/gcc/x86_64-linux-gnu/11/include/cet.h \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_namespace.h \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_nsquare.S \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_pack.S \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/ladder.S \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/ladder_namespace.h
+/usr/include/stdc-predef.h:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/consts.S:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/consts_namespace.h:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_mul.S:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/include/sodium/private/asm_cet.h:
+/usr/lib/gcc/x86_64-linux-gnu/11/include/cet.h:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_namespace.h:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_nsquare.S:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_pack.S:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/ladder.S:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_scalarmult/curve25519/sandy2x/ladder_namespace.h:

@@ -1,0 +1,14 @@
+[settings]
+arch=x86_64
+build_type=Release
+compiler=gcc
+compiler.cppstd=gnu20
+compiler.libcxx=libstdc++11
+compiler.version=11
+os=Linux
+[options]
+build_gmock=True
+disable_pthreads=False
+fPIC=True
+hide_symbols=False
+shared=False

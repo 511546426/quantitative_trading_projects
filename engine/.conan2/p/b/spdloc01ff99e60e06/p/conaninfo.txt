@@ -1,0 +1,16 @@
+[settings]
+arch=x86_64
+build_type=Release
+compiler=gcc
+compiler.cppstd=gnu20
+compiler.libcxx=libstdc++11
+compiler.version=11
+os=Linux
+[options]
+fPIC=True
+header_only=False
+no_exceptions=False
+shared=False
+use_std_fmt=False
+[requires]
+fmt/10.2.Z

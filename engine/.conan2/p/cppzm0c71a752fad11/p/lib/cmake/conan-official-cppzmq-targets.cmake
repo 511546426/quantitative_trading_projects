@@ -1,0 +1,8 @@
+if(TARGET cppzmq::cppzmq AND NOT TARGET cppzmq)
+    add_library(cppzmq INTERFACE IMPORTED)
+    set_property(TARGET cppzmq PROPERTY INTERFACE_LINK_LIBRARIES cppzmq::cppzmq)
+endif()
+if(TARGET cppzmq::cppzmq AND NOT TARGET cppzmq-static)
+    add_library(cppzmq-static INTERFACE IMPORTED)
+    set_property(TARGET cppzmq-static PROPERTY INTERFACE_LINK_LIBRARIES cppzmq::cppzmq)
+endif()

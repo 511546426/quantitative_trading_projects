@@ -1,0 +1,17 @@
+1735899698
+conaninfo.txt: 6bf9510e569872407da047193a0b4951
+include/fmt/args.h: 4ab93e57fef06e77e062929df6fe09b9
+include/fmt/chrono.h: e75bc16059a23f2592df80ed3761408f
+include/fmt/color.h: 5097b557b591acf775755bd1e901639a
+include/fmt/compile.h: f9bcf13304dcc2e9a72c6b988a307424
+include/fmt/core.h: 6088b900427ad35accaebf25cb77e272
+include/fmt/format-inl.h: 99ad6bd222ba04daa3afbdf526834c49
+include/fmt/format.h: c02d5c52e0486001a7cf1cf64ea770e5
+include/fmt/os.h: ecfce270d9f2dbe1237366987e1deaba
+include/fmt/ostream.h: 36fd6492e78c05bb0624d11ed7974e63
+include/fmt/printf.h: 4510b5dbcca5d8ce2df279efe7aa30c3
+include/fmt/ranges.h: 9e7ed69387e08f75805c4e36a53260e7
+include/fmt/std.h: a5291e97e5f2fdb653812bf85560f39a
+include/fmt/xchar.h: 5fdca12bac3735687802ce0725197c55
+lib/libfmt.a: cee2942a656627b4b2ee170b74c1d8ba
+licenses/LICENSE: b9257785fc4f3803a4b71b76c1412729

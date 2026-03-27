@@ -1,0 +1,6 @@
+fmt_version_mapping:
+  1.13.0: 10.2.1
+sources:
+  1.13.0:
+    sha256: 534f2ee1a4dcbeb22249856edfb2be76a1cf4f708a20b0ac2ed090ee24cfdbc9
+    url: https://github.com/gabime/spdlog/archive/v1.13.0.tar.gz

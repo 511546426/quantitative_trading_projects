@@ -1,0 +1,6 @@
+1701157796
+conaninfo.txt: d41d8cd98f00b204e9800998ecf8427e
+include/zmq.hpp: f8247c5c8b628efe888c638272f9855a
+include/zmq_addon.hpp: 3d1384a9f0eed799bb4589af736e0534
+lib/cmake/conan-official-cppzmq-targets.cmake: 5f4ac4047d5fb4d5c9aa80f6172dec1c
+licenses/LICENSE: db174eaf7b55a34a7c89551197f66e94

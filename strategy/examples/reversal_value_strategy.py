@@ -46,27 +46,28 @@ logger = logging.getLogger("reversal_strategy")
 # ─────────────────────────────────────────────────────────────
 # 最终参数（经参数扫描确认，勿随意修改）
 # ─────────────────────────────────────────────────────────────
-START        = "20200101"   # 回测起始日
-END          = "20260304"   # 回测终止日（实盘时改为今日）
+START        = "20100104"   # 回测起始日（覆盖 stock_daily 全量）
+END          = "20260320"   # 回测终止日（以 stock_daily 最新非停牌日为准）
 MIN_AMOUNT   = 100_000      # 日均成交额门槛（千元），即 1 亿
 
-TOP_N        = 15           # 持仓只数：15 > 20 > 30（越少 Sharpe 越高，但集中度更高）
-REBAL_FREQ   = 21           # 调仓周期（交易日），约 1 个月
+TOP_N        = 20           # 持仓只数：适度分散，降低单票集中风险
+REBAL_FREQ   = 42           # 调仓周期（交易日），约 2 个月；关键！大幅降低换手成本
 W_MA60       = 0.6          # MA60 偏离率权重（最强因子）
 W_RSI        = 0.2          # RSI 超卖权重
 W_RET20      = 0.2          # 20 日反转权重
 VOL_CUTOFF   = 0.7          # 波动率过滤：剔除排名最高的 30%
-INERTIA      = 0.05         # 持仓惯性加分（已持有的股票信号+0.05，降低换手）
-LEVERAGE     = 2.35         # 资金杠杆：权重整体等比放大（用于把净年化拉近目标，同时用择时降仓控回撤）
+INERTIA      = 0.10         # 持仓惯性加分（加大惯性降低换手）
+LEVERAGE     = 0.80         # 最优杠杆区间（0.63~0.85）：权衡alpha与方差损耗
+
 
 # 双子策略组合参数（反转 + 动量）
 # 反转-only 在当前样本区间里显著优于引入动量侧，因此先切回反转-only。
-ENABLE_DUAL_STRATEGY = False
-ALLOC_REV = 0.58
-ALLOC_MOM = 0.42
-TOP_N_MOM = 10
-REBAL_FREQ_MOM = 10
-INERTIA_MOM = 0.03
+ENABLE_DUAL_STRATEGY = False  # 回退到纯反转：动量策略熊市崩溃风险过高
+ALLOC_REV = 0.60
+ALLOC_MOM = 0.40
+TOP_N_MOM = 20
+REBAL_FREQ_MOM = 42  # 与反转同步，降换手
+INERTIA_MOM = 0.10
 
 # 市况动态配比（暂不启用）
 REGIME_DYNAMIC_ALLOC = False
@@ -79,16 +80,18 @@ ALLOC_REV_BEAR   = 0.82
 REGIME_ALLOC_REBAL_FREQ = 21
 
 # 择时参数：用指数趋势做“降仓”，降低回撤
-TIMING_ON           = True
-TIMING_USE_INDEX    = True
+TIMING_ON           = False  # 关闭：经多轮验证对反转策略均适得其反
+TIMING_USE_INDEX    = True   # 重新使用指数MA择时
+TIMING_BREADTH      = False  # 关闭宽度择时，回到MA模式
+TIMING_BREADTH_MA   = 10     # 宽度序列平滑窗口
 TIMING_FAST_MA      = 20
-TIMING_SLOW_MA      = 120
+TIMING_SLOW_MA      = 200
+# MA200 择时（温和版）：双策略已提供一定防御，timing仅补充保护
 TIMING_LEVELS = [
-    (0.03,   1.30),
-    (0.015,  1.10),
-    (-0.01,  1.00),
-    (-0.035, 0.80),
-    (-1.00,  0.60),
+    (0.03,  1.20),   # MA20 >> MA200：强势牛市超配
+    (0.005, 1.00),   # MA20 > MA200：正常满仓
+    (-0.05, 0.55),   # MA20 < MA200 5%：熊市信号，降至55%
+    (-1.00, 0.25),   # MA20 << MA200：深熊，保留25%底仓
 ]
 
 # 横截面质量过滤：暂关闭，避免进一步压缩信号池
@@ -97,9 +100,9 @@ QUALITY_JUMP_WINDOW = 5           # 窗口内最大绝对日收益
 QUALITY_JUMP_CUTOFF = 0.90       # 仅保留 jump 截面分位 <= 该值（约剔除最“跳”的 10%）
 
 # 危机层：深度走弱再压一档（与指数趋势一致）
-CRISIS_TIMING_ON       = True
-CRISIS_TREND_THRESHOLD = -0.11
-CRISIS_MAX_EXPOSURE    = 0.7
+CRISIS_TIMING_ON       = False   # 200日MA择时已覆盖，无需重复危机层
+CRISIS_TREND_THRESHOLD = -0.08
+CRISIS_MAX_EXPOSURE    = 0.25
 
 # 动量侧：波动 + 质量过滤（略宽于反转 vol_cutoff，避免动量票池过窄）
 MOM_VOL_CUTOFF = 0.88            # 剔除 20 日波动率截面分位最高的部分
@@ -245,6 +248,7 @@ def build_universe(close: pd.DataFrame, amount: pd.DataFrame, exclude: set) -> p
       - 排除 ST / 退市
       - 排除次新股（上市 < 60 个交易日）
       - 排除流动性不足（日均成交额 < MIN_AMOUNT 千元）
+      - 排除极端下跌股：价格低于 52 周最高价 35% 以下的股票（规避落刀）
     """
     mask = close.notna()
 
@@ -259,6 +263,12 @@ def build_universe(close: pd.DataFrame, amount: pd.DataFrame, exclude: set) -> p
     # 流动性过滤（20 日滚动均值）
     avg_amount = amount.rolling(20, min_periods=10).mean()
     mask = mask & (avg_amount >= MIN_AMOUNT)
+
+    # 52 周高点过滤：剔除价格低于 52 周最高价 35% 以下的股票
+    # 这类股票大概率是持续下跌的问题股，不适合反转策略
+    high_52w = close.rolling(252, min_periods=60).max()
+    not_fallen_knife = (close / high_52w) >= 0.35
+    mask = mask & not_fallen_knife
 
     logger.info("股票池平均 %.0f 只/日", mask.sum(axis=1).mean())
     return mask
@@ -420,6 +430,19 @@ def calc_portfolio_return(
     return net_ret.dropna(), turnover
 
 
+def calc_market_breadth(close: pd.DataFrame, ma_window: int = 60) -> pd.Series:
+    """
+    市场宽度：当日有效股票中股价高于 MA{ma_window} 的比例（0~1）。
+    高宽度（>55%）= 健康牛市，反转有效；
+    低宽度（<35%）= 熊市普跌，反转失效。
+    """
+    ma = close.rolling(ma_window, min_periods=ma_window // 2).mean()
+    above = (close > ma).astype(float)
+    valid = close.notna() & ma.notna()
+    breadth = above.where(valid).sum(axis=1) / valid.sum(axis=1)
+    return breadth
+
+
 def apply_timing_overlay(
     weights: pd.DataFrame,
     close: pd.DataFrame,
@@ -433,32 +456,37 @@ def apply_timing_overlay(
 ) -> tuple[pd.DataFrame, pd.Series]:
     """
     分级择时覆盖层：
-      - market_series：如指数收盘价；None 则用全 A 中位数价
-      - 危机层：趋势弱于阈值时压敞口上限
+      - TIMING_BREADTH=True：使用全市场宽度信号（% 股票 > MA60），适合反转策略
+      - TIMING_BREADTH=False：使用 MA 偏离信号，传统趋势跟随
     """
     levels = levels or TIMING_LEVELS
     levels = sorted(levels, key=lambda x: x[0], reverse=True)
 
-    if market_series is not None:
+    if TIMING_BREADTH:
+        breadth = calc_market_breadth(close, ma_window=60)
+        signal = breadth.rolling(TIMING_BREADTH_MA, min_periods=1).mean()
+        signal = signal.reindex(weights.index).ffill().fillna(0.5)
+    elif market_series is not None:
         market_proxy = market_series.reindex(weights.index).ffill().bfill()
+        ma_fast = market_proxy.rolling(fast_ma, min_periods=fast_ma).mean()
+        ma_slow = market_proxy.rolling(slow_ma, min_periods=slow_ma).mean()
+        signal = (ma_fast / ma_slow - 1.0).fillna(0.0)
     else:
         market_proxy = close.median(axis=1)
-    ma_fast = market_proxy.rolling(fast_ma, min_periods=fast_ma).mean()
-    ma_slow = market_proxy.rolling(slow_ma, min_periods=slow_ma).mean()
-    trend = (ma_fast / ma_slow - 1.0).fillna(0.0)
+        ma_fast = market_proxy.rolling(fast_ma, min_periods=fast_ma).mean()
+        ma_slow = market_proxy.rolling(slow_ma, min_periods=slow_ma).mean()
+        signal = (ma_fast / ma_slow - 1.0).fillna(0.0)
 
-    # 分级赋值：只取“首个满足阈值”的档位，不让后续更宽阈值覆盖前面已命中的仓位
-    # 例：阈值从高到低为 t1>t2>...，若 trend>=t1 应该取 e1；后续即使也满足 trend>=t2 也不能再覆盖。
-    exposure = pd.Series(np.nan, index=trend.index, dtype=float)
+    exposure = pd.Series(np.nan, index=signal.index, dtype=float)
     for th, expo in levels:
-        mask = trend >= th
+        mask = signal >= th
         exposure = exposure.mask(mask & exposure.isna(), expo)
     exposure = exposure.fillna(levels[-1][1])
 
-    if crisis_on:
+    if crisis_on and not TIMING_BREADTH:
         cap = pd.Series(
-            np.where(trend < crisis_trend_th, crisis_max_expo, 1.0).astype(float),
-            index=trend.index,
+            np.where(signal < crisis_trend_th, crisis_max_expo, 1.0).astype(float),
+            index=signal.index,
         )
         exposure = pd.Series(np.minimum(exposure.values, cap.values), index=exposure.index)
 
@@ -506,13 +534,18 @@ def main():
     # ── 子策略信号与权重 ──
     logger.info("计算反转信号...")
     signal_rev = calc_factors(close, universe)
-    logger.info("计算动量信号...")
-    signal_mom = calc_momentum_signal(close, universe)
 
     logger.info("生成反转子策略权重（top=%d）...", TOP_N)
     w_rev = generate_weights(signal_rev, TOP_N, REBAL_FREQ, INERTIA)
-    logger.info("生成动量子策略权重（top=%d）...", TOP_N_MOM)
-    w_mom = generate_weights(signal_mom, TOP_N_MOM, REBAL_FREQ_MOM, INERTIA_MOM)
+
+    # 若动量侧不启用，则跳过动量信号与权重计算，显著减少全量历史回测耗时
+    if ENABLE_DUAL_STRATEGY:
+        logger.info("计算动量信号...")
+        signal_mom = calc_momentum_signal(close, universe)
+        logger.info("生成动量子策略权重（top=%d）...", TOP_N_MOM)
+        w_mom = generate_weights(signal_mom, TOP_N_MOM, REBAL_FREQ_MOM, INERTIA_MOM)
+    else:
+        w_mom = None
 
     if ENABLE_DUAL_STRATEGY and REGIME_DYNAMIC_ALLOC:
         alloc_rev = regime_alloc_series(market_line)
@@ -525,6 +558,7 @@ def main():
             ALLOC_REV_BEAR * 100,
         )
     elif ENABLE_DUAL_STRATEGY:
+        # ENABLE_DUAL_STRATEGY=True 时才会走到这里（因此 w_mom 不为 None）
         weights = combine_substrategy_weights(w_rev, w_mom, ALLOC_REV, ALLOC_MOM)
         logger.info("组合权重: 反转 %.0f%% + 动量 %.0f%%", ALLOC_REV * 100, ALLOC_MOM * 100)
     else:
@@ -554,6 +588,27 @@ def main():
         net_ret_timed, turnover_timed, m_timed = net_ret_base, turnover_base, m_base
 
     # ── 文字报告 ──
+    def _yearly_total_return(net_ret: pd.Series) -> dict[int, float]:
+        """
+        将日收益率序列按自然年聚合为该年的总回报：
+          year_return = prod(1 + r_day) - 1
+        """
+        if net_ret is None or len(net_ret) == 0:
+            return {}
+        years = sorted(set(net_ret.index.year))
+        out: dict[int, float] = {}
+        for y in years:
+            r = net_ret.loc[net_ret.index.year == y]
+            if len(r) == 0:
+                continue
+            out[int(y)] = float((1.0 + r).prod() - 1.0)
+        return out
+
+    def _total_return(net_ret: pd.Series) -> float:
+        if net_ret is None or len(net_ret) == 0:
+            return 0.0
+        return float((1.0 + net_ret).prod() - 1.0)
+
     print("\n=== 基线版（无择时） ===")
     print(format_report(m_base))
     print("\n=== 择时版（熊市降仓） ===")
@@ -564,15 +619,21 @@ def main():
     )
 
     print("\n── 逐年收益 ──")
-    print(f"  {'年份':>4}  {'年度收益':>8}  {'最大回撤':>8}")
-    for yr in range(2020, 2027):
-        r_ = net_ret_timed[f"{yr}0101":f"{yr}1231"]
-        if len(r_) < 20:
+    print(f"  {'年份':>4}  {'年度总回报':>12}  {'该年回撤':>10}")
+    yearly = _yearly_total_return(net_ret_timed)
+    for yr, yr_ret in yearly.items():
+        r_ = net_ret_timed.loc[net_ret_timed.index.year == yr]
+        if len(r_) < 5:
             continue
-        cum = (1 + r_).prod() - 1
-        dd  = ((1 + r_).cumprod() / (1 + r_).cumprod().cummax() - 1).min()
-        tag = " ← 大牛市" if yr in (2020, 2025) else (" ← 熊市" if yr == 2022 else "")
-        print(f"  {yr}   {cum:>+8.1%}  {dd:>8.1%}{tag}")
+        dd = ((1 + r_).cumprod() / (1 + r_).cumprod().cummax() - 1).min()
+        print(f"  {yr}   {yr_ret:>+12.1%}  {dd:>10.1%}")
+
+    # 总回报（2010~终止日，择时版口径）
+    total_ret_timed = _total_return(net_ret_timed)
+    total_ret_base = _total_return(net_ret_base)
+    print("\n── 2010~至终止日 总收益（总回报）──")
+    print(f"  基线版（无择时）总回报: {total_ret_base:+.1%}")
+    print(f"  择时版（熊市降仓）总回报: {total_ret_timed:+.1%}")
 
     ann_turn = (m_timed.get("annualized_turnover", 0) or 0)
     print(f"\n── 成本估算（年换手 {ann_turn:.0%}）──")

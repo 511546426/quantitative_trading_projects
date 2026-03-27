@@ -1,0 +1,8 @@
+crypto_stream/salsa20/xmm6/libsodium_la-salsa20_xmm6-asm.lo: \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/crypto_stream/salsa20/xmm6/salsa20_xmm6-asm.S \
+ /usr/include/stdc-predef.h \
+ /home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/include/sodium/private/asm_cet.h \
+ /usr/lib/gcc/x86_64-linux-gnu/11/include/cet.h
+/usr/include/stdc-predef.h:
+/home/lcw/quantitative_trading_projects/engine/.conan2/p/b/libso64d4ead000fec/b/src/src/libsodium/include/sodium/private/asm_cet.h:
+/usr/lib/gcc/x86_64-linux-gnu/11/include/cet.h:
