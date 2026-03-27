@@ -1,0 +1,49 @@
+# ═══════════════════════════════════════════════════════════
+# 交易执行引擎配置
+#
+# 敏感信息请使用环境变量：
+#   QMT_ACCOUNT=资金账号
+#   QMT_PATH=miniQMT客户端路径
+#   PG_PASSWORD=PostgreSQL密码
+#   WECHAT_WEBHOOK=企微机器人URL
+# ═══════════════════════════════════════════════════════════
+
+initial_cash: 20000.0
+strategy_id: "reversal_v1"
+
+gateway:
+  type: "mock"                   # mock（模拟）/ qmt（实盘）
+  qmt_path: ""                   # QMT 安装路径，如 C:/国金证券QMT/userdata_mini
+  account_id: ""                 # 资金账号
+
+# ZMQ 通道（与 C++ engine.yaml 保持一致）
+zmq:
+  signal: "ipc:///tmp/quant_signals"    # 策略 → C++ 引擎
+  order:  "ipc:///tmp/quant_orders"     # C++ 引擎 → QMT 适配器
+  fill:   "ipc:///tmp/quant_fills"      # QMT 适配器 → C++ 引擎
+  status: "ipc:///tmp/quant_status"     # C++ 引擎 → 监控
+
+algo:
+  default_algo: "twap"
+  twap_slices: 5
+  twap_interval_sec: 60
+  price_tolerance: 0.005
+
+persist:
+  pg_host: "127.0.0.1"
+  pg_port: 5432
+  pg_user: "postgres"
+  pg_password: ""
+  pg_database: "quant"
+
+monitor:
+  enable_wechat: false
+  wechat_webhook: ""
+  log_dir: "logs"
+
+trading:
+  commission_rate: 0.00025
+  commission_min: 5.0
+  stamp_duty_rate: 0.001
+  slippage_rate: 0.001
+  lot_size: 100

@@ -220,7 +220,8 @@ class PositionManager:
         print(f"{'='*55}")
         print(f"  总资产:   ¥{s.total_value:>12,.0f}  ({s.total_return_pct:+.2%})")
         print(f"  持仓市值: ¥{s.total_market_value:>12,.0f}")
-        print(f"  可用现金: ¥{s.cash:>12,.0f}  ({s.cash/s.total_value:.1%})")
+        cash_pct = f"{s.cash/s.total_value:.1%}" if s.total_value > 0 else "N/A"
+        print(f"  可用现金: ¥{s.cash:>12,.0f}  ({cash_pct})")
         print(f"{'─'*55}")
         if s.positions:
             print(f"  {'代码':<12}{'股数':>8}{'成本':>10}{'现价':>10}{'盈亏':>10}{'占比':>8}")

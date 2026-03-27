@@ -5,7 +5,6 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
-#include <mutex>
 
 namespace quant::oms {
 

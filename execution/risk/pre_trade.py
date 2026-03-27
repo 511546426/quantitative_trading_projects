@@ -46,6 +46,8 @@ class PreTradeChecker:
         checks = [
             self._check_suspended,
             self._check_limit_up_down,
+            self._check_position_limit,
+            self._check_cash_sufficient,
         ]
         for fn in checks:
             ok, reason = fn(order, portfolio, price_data)

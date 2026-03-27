@@ -28,7 +28,52 @@ message SignalBatch {
 }
 
 // ────────────────────────────────────────────────────────────
-// EngineStatus - C++ 引擎回传给 Python 的状态（可选）
+// OrderCommand - C++ 引擎 → Python QMT 适配器
+// 经过风控检查后的订单指令
+// ────────────────────────────────────────────────────────────
+message OrderCommand {
+    int64  order_id         = 1;
+    string symbol           = 2;   // "000001.SZ"
+    string side             = 3;   // "BUY" / "SELL"
+    string order_type       = 4;   // "MARKET" / "LIMIT"
+    int64  quantity         = 5;   // 目标数量（股）
+    double price            = 6;   // 限价（市价单为 0）
+    string strategy_id      = 7;
+    int64  created_ns       = 8;
+    string algo             = 9;   // "direct" / "twap" / "vwap"
+    int32  twap_slices      = 10;  // TWAP 分几笔
+    int32  twap_interval_sec = 11; // TWAP 间隔秒
+}
+
+// ────────────────────────────────────────────────────────────
+// OrderCommandBatch - 一次重平衡产生的批量订单指令
+// ────────────────────────────────────────────────────────────
+message OrderCommandBatch {
+    repeated OrderCommand orders = 1;
+    int64  batch_time_ns   = 2;
+    string strategy_id     = 3;
+}
+
+// ────────────────────────────────────────────────────────────
+// FillReport - Python QMT 适配器 → C++ 引擎
+// 券商成交回报
+// ────────────────────────────────────────────────────────────
+message FillReport {
+    int64  order_id         = 1;
+    int64  trade_id         = 2;
+    string symbol           = 3;
+    string side             = 4;   // "BUY" / "SELL"
+    int64  fill_quantity    = 5;
+    double fill_price       = 6;
+    double commission       = 7;
+    double stamp_duty       = 8;
+    int64  fill_time_ns     = 9;
+    string status           = 10;  // "FILLED" / "PARTIAL" / "CANCELLED" / "REJECTED"
+    string reject_reason    = 11;
+}
+
+// ────────────────────────────────────────────────────────────
+// EngineStatus - C++ 引擎回传给 Python 的状态
 // ────────────────────────────────────────────────────────────
 message EngineStatus {
     double nav              = 1;

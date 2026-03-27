@@ -36,9 +36,7 @@ public:
         pnl.timestamp_ns   = snap.snapshot_ns;
         pnl.nav            = snap.nav();
         pnl.realized_pnl   = snap.realized_pnl;
-        pnl.unrealized_pnl = snap.market_value() - snap.market_value(); // placeholder
 
-        // 计算浮盈
         double unrealized = 0.0;
         for (const auto& [_, pos] : snap.positions) {
             unrealized += pos.unrealized_pnl();

@@ -24,9 +24,6 @@ struct Clock {
         return static_cast<int64_t>(ts.tv_sec) * 1'000'000'000LL + ts.tv_nsec;
     }
 
-    // 将 YYYYMMDDHHMMSS 格式字符串转换为纳秒时间戳（近似）
-    // 主要用于将 Tushare 日期字符串转换
-    static int64_t from_yyyymmdd(const char* date_str) noexcept;
 };
 
 // ────────────────────────────────────────────────────────────

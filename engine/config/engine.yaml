@@ -1,14 +1,24 @@
 # QuantEngine 配置文件
 # 修改后重启引擎生效
 
-initial_cash: 20000.0       # 初始资金（元）
-gateway: "mock"             # 可选: mock / xtp / qmt
+initial_cash: 20000.0
+gateway: "mock"              # mock = 模拟撮合（测试用），qmt = 真实 QMT 交易
 
-zmq_endpoint: "ipc:///tmp/quant_signals"   # 与 Python 端 PUSH 地址一致
+# 执行算法
+algo: "twap"                 # direct / twap / vwap
+twap_slices: 5               # TWAP 拆几笔
+twap_interval_sec: 60        # TWAP 每笔间隔（秒）
+
+# ZMQ 四通道
+zmq_signal: "ipc:///tmp/quant_signals"   # ← 策略信号 (Python → C++)
+zmq_order:  "ipc:///tmp/quant_orders"    # → 订单指令 (C++ → Python QMT)
+zmq_fill:   "ipc:///tmp/quant_fills"     # ← 成交回报 (Python QMT → C++)
+zmq_status: "ipc:///tmp/quant_status"    # → 状态广播 (C++ → 监控)
+
 log_file: "logs/engine.log"
 
 risk:
-  max_single_position_ratio: 0.10   # 单股最大仓位
+  max_single_position_ratio: 0.10
   max_total_position_ratio:  0.95
   max_order_amount:          500000
   max_daily_loss_ratio:      0.03

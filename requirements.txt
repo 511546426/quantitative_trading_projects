@@ -28,6 +28,10 @@ apscheduler>=3.10.4
 # === 日志 ===
 loguru>=0.7.2
 
+# === C++ 引擎通信 ===
+pyzmq>=25.1.0
+protobuf>=4.25.0
+
 # === 运维 Web 界面 ===
 streamlit>=1.33.0
 
