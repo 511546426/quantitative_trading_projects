@@ -16,6 +16,95 @@
 
 ---
 
+## 项目结构图
+
+下列为**主要源码与配置目录**；未列出 `.git`、`.venv`、`__pycache__`、`engine/build`、本地 Conan 缓存等生成物。
+
+### 目录树（摘要）
+
+```text
+quantitative_trading_projects/
+├── README.md
+├── requirements.txt
+├── .env                          # 本地：库连接、Token（勿提交仓库）
+│
+├── data/                         # 数据层（抓取、清洗、入库、配置）
+│   ├── config/                   # settings.yaml, sources.yaml, schedules.yaml
+│   ├── common/                   # 公共配置加载等
+│   ├── fetchers/                 # Tushare 等拉取
+│   ├── writers/                  # ClickHouse / PostgreSQL 写入
+│   ├── pipeline/                 # 流水线编排
+│   ├── cleaners/                 # 清洗
+│   └── quality/                  # 质量检查
+│
+├── strategy/                     # 策略研究 / 回测
+│   ├── backtest/                 # metrics, visualizer
+│   ├── examples/                 # regime_switching_strategy, reversal_value_strategy, …
+│   ├── factors/
+│   ├── signals/
+│   └── analysis/
+│
+├── engine/                       # C++ 执行引擎
+│   ├── CMakeLists.txt
+│   ├── conanfile.txt             # Conan 依赖（若使用）
+│   ├── proto/                    # signal.proto 等
+│   ├── include/quant/            # 头文件（infra, oms, risk, …）
+│   ├── src/                      # main, gateway, oms, …
+│   ├── python/                   # 生成或辅助的 Python（如 *_pb2）
+│   ├── config/                   # engine.yaml
+│   ├── tests/
+│   └── benchmarks/
+│
+├── execution/                    # 实盘桥接与风控（Python）
+│   ├── adapter/                  # qmt_adapter 等
+│   ├── bridge/                   # 与引擎 ZMQ / 信号对接
+│   ├── risk/                     # pre_trade 等
+│   ├── portfolio/
+│   ├── oms/
+│   ├── algo/                     # TWAP 等
+│   ├── persist/                  # 落库
+│   ├── monitor/
+│   ├── gateway/
+│   ├── broker/
+│   ├── examples/
+│   ├── config.yaml
+│   └── run.py                    # 运行入口之一
+│
+├── docs/                         # 文档与产出
+│   ├── reports/                  # 回测图（如 multifactor_v4.png）
+│   ├── architecture/             # 分层说明（若保留）
+│   ├── cpp-design/
+│   ├── phases/
+│   ├── research/
+│   └── ops/
+│
+├── scripts/                      # 运维 / 一次性脚本
+└── ui/                           # 可视化或 Streamlit 等（若使用）
+```
+
+### 结构关系（Mermaid）
+
+```mermaid
+flowchart TB
+  subgraph repo[仓库根目录]
+    DATA[data/ 数据抓取与入库]
+    STR[strategy/ 因子与回测]
+    ENG[engine/ C++ 引擎]
+    EXE[execution/ 实盘与桥接]
+    DOC[docs/ 文档与报告图]
+    SCR[scripts/]
+    UI[ui/]
+  end
+
+  DATA -->|SQL 历史行情与估值| STR
+  STR -->|回测净值 不经过引擎| OUT1[终端报告 / docs/reports]
+  STR -->|可选: 目标权重或信号| EXE
+  EXE -->|Protobuf + ZMQ| ENG
+  ENG -->|订单意图| EXE
+```
+
+---
+
 ## 系统架构（与仓库对应）
 
 ```
