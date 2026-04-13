@@ -79,7 +79,7 @@ quantitative_trading_projects/
 │   └── ops/
 │
 ├── scripts/                      # 运维 / 一次性脚本
-└── ui/                           # 可视化或 Streamlit 等（若使用）
+└── ui/                           # Streamlit 轻量台 + 机构级 React 控制台 + FastAPI
 ```
 
 ### 结构关系（Mermaid）
@@ -272,6 +272,46 @@ python3 strategy/examples/regime_switching_lot_20k.py --show-model
 - **年化收益率**：按回测区间长度复利折算，不是「每一年都达到该数字」
 - **年度收益**：日历年内日收益连乘，便于看单年好坏
 - 回测为 **理想化成交**（收盘价、无涨跌停不可成交、无盘中熔断等），实盘需打折评估
+
+---
+
+## 机构级运维控制台（React + FastAPI）
+
+与 `./ops.sh` 同源：REST 触发 `status` / `start-db` / `daily` 等；后台回填与日志路径与 `ui/ops_dashboard.py` 一致。适合内网部署、权限收口与 **WebSocket 实时日志**。
+
+**依赖**：`pip install -r requirements.txt`；前端需 **Node 18+**（`npm`）。
+
+**开发（双进程）**
+
+1. 启动 API（仓库根目录）：
+
+   ```bash
+   ./ops.sh web-pro 8787
+   # 等价: PYTHONPATH=. .venv/bin/python -m uvicorn ui.server.app:app --host 127.0.0.1 --port 8787
+   ```
+
+2. 启动前端（新终端）：
+
+   ```bash
+   cd ui/ops-console && npm install && npm run dev
+   ```
+
+   浏览器打开 `http://127.0.0.1:5173`（Vite 将 `/api` 与 WebSocket 代理到 `8787`）。
+
+**生产（单端口）**：先在 `ui/ops-console` 执行 `npm run build`，再只运行 `./ops.sh web-pro`；构建产物 `dist/` 由 FastAPI 挂载在站点根路径 `/`，API 仍在 `/api/*`。
+
+**可选鉴权**：设置环境变量 `QUANT_OPS_API_KEY` 后，除 `GET /api/health`、`GET /api/meta` 外，REST 需请求头 `X-API-Key`；日志 WebSocket 使用查询参数 `token`（与密钥相同）。前端侧栏 **连接与凭据** 可写入浏览器 `localStorage`。
+
+**CORS**：默认允许本机 `5173` / `8787`；其他来源可设 `QUANT_OPS_CORS`（逗号分隔 Origin）。
+
+**单股 K 线与简易回测**（Web 侧栏「单股研究」）：依赖已回填的 ClickHouse `stock_daily` 与 PostgreSQL `stock_info`。主要接口（均需 `X-API-Key`，若已启用鉴权）：
+
+- `GET /api/research/stocks?q=`：按代码/名称模糊搜索；
+- `POST /api/research/single-stock-run`：请求体含 `ts_code`、`start`/`end`（YYYYMMDD）、`strategy`（`ma_cross` | `buy_hold`）及均线参数，返回 K 线序列与净值曲线数据；
+- `POST /api/research/regime-model-run`：请求体 `ts_code`、`start`、`end`，在服务端执行与 `strategy/examples/regime_switching_strategy.py` **同一套 v4.1** 因子、TOP_N、杠杆、成本与组合止损（全市场按年加载），返回组合净值、该标的买入持有净值、该标的日度权重及 K 线；**可能较慢且占内存**；
+- `GET /api/research/bars`：仅拉取 OHLCV。
+
+**轻量 Streamlit 台**：`./ops.sh web` 仍为 `ui/ops_dashboard.py`。
 
 ---
 

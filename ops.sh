@@ -36,6 +36,9 @@ Commands:
   logs backfill-valuation Tail valuation backfill log
 
   web [port]             Start Streamlit Web 运维界面 (default port 8501)
+  web-pro [port]         Start FastAPI + 机构级 React 控制台 API (default 8787)
+                         前端开发: cd ui/ops-console && npm i && npm run dev
+                         生产: cd ui/ops-console && npm run build 后同源托管静态资源
 
 Examples:
   ./ops.sh status
@@ -311,6 +314,20 @@ main() {
       fi
       echo "[INFO] 启动 Web 运维界面: http://127.0.0.1:${port}"
       exec "${py}" -m streamlit run "${dash}" --server.port "${port}" --server.address 127.0.0.1
+      ;;
+    web-pro)
+      port="${1:-8787}"
+      py="${PROJECT_DIR}/.venv/bin/python"
+      if [[ ! -x "${py}" ]]; then
+        echo "[ERROR] venv python not found: ${py}" >&2
+        exit 1
+      fi
+      echo "[INFO] Ops API (FastAPI): http://127.0.0.1:${port}/api/health"
+      echo "[INFO] 若已 npm run build，则静态 UI 同源根路径 /"
+      echo "[INFO] 开发前端: 另开终端 cd ui/ops-console && npm run dev （Vite 代理 /api → 本端口）"
+      cd "${PROJECT_DIR}" && exec env PYTHONPATH="${PROJECT_DIR}" \
+        "${py}" -m uvicorn ui.server.app:app --host 127.0.0.1 --port "${port}" \
+        --timeout-graceful-shutdown 5
       ;;
     *)
       echo "[ERROR] unknown command: ${cmd}" >&2

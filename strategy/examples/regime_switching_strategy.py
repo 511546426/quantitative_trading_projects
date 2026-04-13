@@ -20,6 +20,7 @@ import gc
 import sys
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -120,9 +121,25 @@ def connect_db(cfg):
     return ch, pg
 
 
-def load_price(ch) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _ymd_to_ts(s: str) -> pd.Timestamp:
+    """YYYYMMDD → Timestamp（日频对齐）。"""
+    return pd.Timestamp(f"{s[:4]}-{s[4:6]}-{s[6:8]}")
+
+
+def _slice_panel(df: pd.DataFrame, date_start: str, date_end: str) -> pd.DataFrame:
+    t0, t1 = _ymd_to_ts(date_start), _ymd_to_ts(date_end)
+    return df.loc[t0:t1]
+
+
+def load_price(
+    ch,
+    date_start: str | None = None,
+    date_end: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """按年分块加载复权收盘价和成交额（与反转策略完全相同的实现）。"""
-    sy, ey = int(START[:4]), int(END[:4])
+    ds = date_start or START
+    de = date_end or END
+    sy, ey = int(ds[:4]), int(de[:4])
     c_close: list[pd.DataFrame] = []
     c_amount: list[pd.DataFrame] = []
 
@@ -150,13 +167,21 @@ def load_price(ch) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     close  = pd.concat(c_close,  axis=0, sort=True).sort_index(); del c_close;  gc.collect()
     amount = pd.concat(c_amount, axis=0, sort=True).sort_index(); del c_amount; gc.collect()
+    close = _slice_panel(close, ds, de)
+    amount = _slice_panel(amount, ds, de)
     logger.info("行情: %d 交易日 × %d 只", *close.shape)
     return close, amount
 
 
-def load_valuation(pg) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_valuation(
+    pg,
+    date_start: str | None = None,
+    date_end: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """按年分块加载 PB、PE_TTM、流通市值（与反转策略风格一致）。"""
-    sy, ey = int(START[:4]), int(END[:4])
+    ds = date_start or START
+    de = date_end or END
+    sy, ey = int(ds[:4]), int(de[:4])
     c_pb: list[pd.DataFrame] = []
     c_pe: list[pd.DataFrame] = []
     c_mv: list[pd.DataFrame] = []
@@ -182,6 +207,9 @@ def load_valuation(pg) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     pb = pd.concat(c_pb, axis=0, sort=True).sort_index(); del c_pb; gc.collect()
     pe = pd.concat(c_pe, axis=0, sort=True).sort_index(); del c_pe; gc.collect()
     mv = pd.concat(c_mv, axis=0, sort=True).sort_index(); del c_mv; gc.collect()
+    pb = _slice_panel(pb, ds, de)
+    pe = _slice_panel(pe, ds, de)
+    mv = _slice_panel(mv, ds, de)
     logger.info("估值 (PB+PE+MV): %d 交易日 × %d 只", *pb.shape)
     return pb, pe, mv
 
@@ -193,12 +221,20 @@ def load_exclude_list(pg) -> set:
     return {r[0] for r in rows}
 
 
-def load_index_close(ch, ts_code: str = BENCHMARK) -> pd.Series | None:
+def load_index_close(
+    ch,
+    ts_code: str = BENCHMARK,
+    date_start: str | None = None,
+    date_end: str | None = None,
+) -> pd.Series | None:
+    ds = date_start or START
+    de = date_end or END
     sql = f"""
         SELECT trade_date, max(close) AS close
         FROM index_daily
         WHERE ts_code = '{ts_code}'
-          AND trade_date >= '{START}' AND trade_date <= '{END}'
+          AND trade_date >= toDate('{ds[:4]}-{ds[4:6]}-{ds[6:8]}')
+          AND trade_date <= toDate('{de[:4]}-{de[4:6]}-{de[6:8]}')
         GROUP BY trade_date ORDER BY trade_date
     """
     try:
@@ -562,6 +598,133 @@ def calc_portfolio_return(
 
     net_ret = port_ret - cost
     return net_ret.dropna(), turnover
+
+
+# ═══════════════════════════════════════════════════════════
+# Web / API：同一套 v4.1 管线（可指定区间）
+# ═══════════════════════════════════════════════════════════
+def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str) -> dict[str, Any]:
+    """
+    与 ``main()`` 相同的因子、TOP_N、杠杆、成本与组合止损逻辑；
+    额外返回指定 ``ts_code`` 在组合中的日度权重及「该标的买入持有」基准净值，供前端与 K 线对照。
+
+    Parameters
+    ----------
+    date_start, date_end
+        YYYYMMDD，须在 ``START``/``END`` 与数据覆盖范围内。
+    ts_code
+        如 ``601318.SH``；须存在于裁剪后的行情列中。
+
+    Raises
+    ------
+    ValueError
+        未知标的或数据不足以回测。
+    """
+    ts_code = ts_code.strip().upper()
+    cfg = Config.load("data/config/settings.yaml", "data/config/sources.yaml")
+    ch, pg = connect_db(cfg)
+    try:
+        close, amount = load_price(ch, date_start, date_end)
+        exclude = load_exclude_list(pg)
+        try:
+            pb, pe_ttm, circ_mv = load_valuation(pg, date_start, date_end)
+        except Exception as e:
+            logger.warning("估值加载失败: %s", e)
+            pb, pe_ttm, circ_mv = None, None, None
+
+        universe = build_universe(close, amount, exclude, circ_mv=circ_mv)
+        del amount
+        gc.collect()
+
+        index_close = load_index_close(ch, BENCHMARK, date_start, date_end)
+
+        active = universe.any(axis=0)
+        if active.sum() < universe.shape[1]:
+            nb = universe.shape[1]
+            close = close.loc[:, active]
+            universe = universe.loc[:, active]
+            if pb is not None:
+                pb = pb.reindex(columns=close.columns)
+            if pe_ttm is not None:
+                pe_ttm = pe_ttm.reindex(columns=close.columns)
+            if circ_mv is not None:
+                circ_mv = circ_mv.reindex(columns=close.columns)
+            logger.info("裁剪: %d → %d 只", nb, int(active.sum()))
+        del active
+        gc.collect()
+
+        if ts_code not in close.columns:
+            raise ValueError(f"标的 {ts_code} 不在模型可交易列（可能无行情或被池过滤）")
+
+        bull = regime_bull_exante(index_close, close.index) if index_close is not None else None
+        signal = calc_signal(
+            close, universe, pb=pb, pe_ttm=pe_ttm, circ_mv=circ_mv, regime_bull=bull
+        )
+        del pb, pe_ttm, circ_mv, universe
+        gc.collect()
+
+        weights = generate_weights(signal)
+        del signal
+        gc.collect()
+
+        if float(LEVERAGE) != 1.0:
+            lev_ser = pd.Series(float(LEVERAGE), index=weights.index)
+            if index_close is not None:
+                bflt = regime_bull_exante(index_close, weights.index).astype(np.float64)
+                lev_ser = lev_ser * (1.0 + bflt * (float(REGIME_LEV_MULT) - 1.0))
+            weights = weights.multiply(lev_ser, axis=0)
+
+        net_ret, turnover = calc_portfolio_return(weights, close)
+        net_ret = apply_portfolio_stop(net_ret, index_close=index_close)
+        metrics = calc_full_metrics(net_ret, turnover)
+
+        def _json_metrics(m: dict) -> dict[str, Any]:
+            out: dict[str, Any] = {}
+            for k, v in m.items():
+                if isinstance(v, (np.floating, float)):
+                    out[k] = float(v)
+                elif isinstance(v, (np.integer, int)):
+                    out[k] = int(v)
+                elif isinstance(v, str):
+                    out[k] = v
+                elif v is None:
+                    out[k] = None
+                elif hasattr(v, "isoformat"):
+                    out[k] = v.isoformat()
+                elif hasattr(v, "item"):
+                    out[k] = float(v.item())
+                else:
+                    out[k] = str(v)
+            return out
+
+        wcol = weights[ts_code].reindex(net_ret.index).fillna(0.0)
+        port_eq = (1 + net_ret).cumprod()
+        sc = close[ts_code].reindex(net_ret.index).ffill()
+        st_ret = sc.pct_change(fill_method=None).fillna(0.0)
+        bench_eq = (1 + st_ret).cumprod()
+
+        series: list[dict[str, Any]] = []
+        for t in net_ret.index:
+            series.append(
+                {
+                    "time": t.strftime("%Y-%m-%d") if hasattr(t, "strftime") else str(t)[:10],
+                    "portfolio_equity": float(port_eq.loc[t]),
+                    "stock_benchmark_equity": float(bench_eq.loc[t]),
+                    "model_weight": float(wcol.loc[t]),
+                }
+            )
+
+        return {
+            "model": "regime_switching_v4.1",
+            "ts_code": ts_code,
+            "date_start": date_start,
+            "date_end": date_end,
+            "metrics_portfolio": _json_metrics(metrics),
+            "series": series,
+        }
+    finally:
+        ch.close()
+        pg.close()
 
 
 # ═══════════════════════════════════════════════════════════

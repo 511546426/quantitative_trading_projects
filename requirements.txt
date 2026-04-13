@@ -34,6 +34,8 @@ protobuf>=4.25.0
 
 # === 运维 Web 界面 ===
 streamlit>=1.33.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
 
 # === 开发/测试 ===
 pytest>=8.0.0

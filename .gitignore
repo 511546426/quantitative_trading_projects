@@ -17,6 +17,9 @@ execution/state/
 # 回填/任务断点（运行时生成，勿提交）
 scripts/*checkpoint*.json
 
+# 前端（机构级控制台）
+ui/ops-console/node_modules/
+
 # Python
 __pycache__/
 *.pyc
