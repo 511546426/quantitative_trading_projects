@@ -146,20 +146,26 @@ flowchart TB
 
 ---
 
-## 多因子策略 v4（当前主示例）
+## 多因子策略 v4 / v4.1（当前主示例）
 
 **文件**：`strategy/examples/regime_switching_strategy.py`
 
-**思路**：截面多因子打分 + 季度调仓 + 惯性保留部分老仓 + **名义 2× 杠杆**（权重缩放）+ **组合净值回撤止损** + **CSI300 双均线重入**。
+**思路**：截面多因子打分 + 季度调仓 + 惯性保留部分老仓 + **名义杠杆**（权重缩放）+ **组合净值回撤止损** + **CSI300 双均线重入**。
 
-**因子（权重合计 1.0，截面 rank 后加权）**
+**v4.1 策略层（趋势牛增厚，无前瞻）**
+
+- **趋势牛**（用于当日决策）：前一交易日 CSI300 **昨收 > 昨 MA60** 且 **昨 MA20 > 昨 MA60**。
+- 牛市：**有效杠杆** ≈ `LEVERAGE × REGIME_LEV_MULT`；组合止损阈值用 **STOP_LOSS_BULL**（宽于非牛 **STOP_LOSS**）。
+- 牛市：因子侧 **MOM120 权重上调、RET60/MA60 下调**（按行重新归一化）。
+
+**因子基线权重（合计 1.0，截面 rank 后加权；牛市在上述范围内动态倾斜）**
 
 | 因子 | 权重 | 含义（高分 = 更想持有） |
 |------|------|-------------------------|
-| MA60 | 0.25 | 价格相对 60 日均线偏低（均值回复） |
+| MA60 | 0.20 | 价格相对 60 日均线偏低（均值回复） |
 | RSI | 0.07 | RSI 低（超卖） |
-| RET60 | 0.07 | 60 日收益率低（中期反转） |
-| MOM120 | 0.25 | 120 日收益率高（中期动量/复苏） |
+| RET60 | 0.05 | 60 日收益率低（中期反转） |
+| MOM120 | 0.32 | 120 日收益率高（中期动量/复苏） |
 | PB | 0.16 | 市净率低 |
 | SIZE | 0.08 | 流通市值小 |
 | EP | 0.12 | 盈利收益率 1/PE（剔除异常 PE） |
@@ -172,18 +178,18 @@ flowchart TB
 
 **组合**
 
-- `TOP_N=30`，`REBAL_FREQ=63`（交易日），`INERTIA=0.30`（上期持仓在调仓日加分）
-- `LEVERAGE=2.0`：对权重整体乘以 2（回测意义上的名义杠杆；实盘请与融资能力一致）
+- `TOP_N=30`，`REBAL_FREQ≈50`（交易日），`INERTIA≈0.24`（上期持仓在调仓日加分）
+- `LEVERAGE≈2.22`，牛市再乘 `REGIME_LEV_MULT≈1.14`（回测名义杠杆；实盘请与融资能力一致）
 - 成本：`BUY_COST_BPS=7.5`，`SELL_COST_BPS=17.5`（按换手估算）
 
 **组合层止损（后处理净值序列）**
 
-- 自高点回撤超过 `STOP_LOSS=15%`：当日起视为清仓（当日收益置 0）
+- 非牛：自高点回撤超过 `STOP_LOSS≈17%` 触发清仓逻辑；牛：`STOP_LOSS_BULL≈27%`（见代码常量）。
 - 重入：空仓满 `STOP_COOLDOWN=63` 日强制恢复，或满 10 日且 **昨收 CSI300 同时高于 20 日与 60 日均线**（信号均用前一日，避免前视）
 
 ### v4 回测结果快照（示例跑批，非承诺收益）
 
-以下为 **`regime_switching_strategy.py`** 在 **区间 2010-01-04～2026-03-20**、本地 ClickHouse/PostgreSQL 数据完整、参数为当前代码默认值时的一次完整跑批结果，**仅作文档对照**；换数据、换区间或改参数后须自行重跑。
+以下为 **v4.0 参数** 下一次完整跑批的**存档对照**；当前仓库默认已为 **v4.1**（趋势牛增厚），**请本地重跑** `regime_switching_strategy.py` 更新数字。区间 **2010-01-04～2026-03-20**，数据为本地 ClickHouse/PostgreSQL。
 
 **全样本（约 15.6 年，3935 交易日）**
 
@@ -234,15 +240,26 @@ flowchart TB
 
 **前置条件**
 
-1. Python 3.10+，建议虚拟环境：`python -m venv .venv && source .venv/bin/activate`
-2. 安装依赖：`pip install -r requirements.txt`
+1. Python 3.10+，建议虚拟环境：`python3 -m venv .venv && source .venv/bin/activate`（Debian/Ubuntu 通常无 `python` 命令，需 `python3` 或安装 `python-is-python3`）
+2. 安装依赖：`pip install -r requirements.txt`（未激活 venv 时可用 `python3 -m pip install -r requirements.txt`）
 3. 数据库：ClickHouse、PostgreSQL 按项目 `data/` 侧配置启动，`.env` 或 `data/config/settings.yaml` 中填写连接信息（与 `ClickHouseWriter` / `PostgresWriter` 一致）
 4. 库内已有与策略区间匹配的 **日线行情、指数、日度估值** 等表数据（由 Tushare 拉取脚本写入）
 
 **运行示例**
 
 ```bash
-python strategy/examples/regime_switching_strategy.py
+# 任选其一（推荐用 venv 里的解释器，不依赖系统是否提供 python 别名）
+python3 strategy/examples/regime_switching_strategy.py
+# 或: .venv/bin/python strategy/examples/regime_switching_strategy.py
+```
+
+**整手真实回测（`regime_switching_lot_20k.py`）**  
+默认 **只输出** 指定本金下的 **100 股整手 + 最低佣 + 增量调仓** 账户权益曲线（与主脚本同信号、动态杠杆、模型止损日历）。小资金按 `lot_effective_top_n()` **自动收窄 TOP_N**（同一套截面信号下少持几只、避免一手都买不起的欠配）；主脚本理想回测仍为 **TOP_N=30**。`--show-model` 打印 **30 只** 小数权重模型百分比，便于对照。
+
+```bash
+python3 strategy/examples/regime_switching_lot_20k.py
+python3 strategy/examples/regime_switching_lot_20k.py --capital 100000
+python3 strategy/examples/regime_switching_lot_20k.py --show-model
 ```
 
 **输出**

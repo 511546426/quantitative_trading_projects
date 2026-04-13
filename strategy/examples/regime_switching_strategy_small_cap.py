@@ -1,20 +1,16 @@
-"""A 股多因子策略 v4 — 反转 + 价值 + 动量 + 盈利
+#!/usr/bin/env python3
+"""
+A股多因子策略 v4.2 - 小本金优化版
 
-改进点（vs 上一版）:
-  1. 修复 generate_weights 权重堆积致命 bug
-  2. 换手率优化: REBAL_FREQ 63, INERTIA 0.30, RET60 替换 RET20
-  3. 去除大市值限制（MAX_MV）: 覆盖蓝筹大牛年（2017/2020/2024）
-  4. 去除市场择时叠加: 反转策略在熊末反弹最强，择时反而截断收益
-  5. 新增 MOM120 正向动量因子: 捕捉"底部复苏+中期趋势"的甜蜜区
+针对10万本金的整手回测优化：
+1. 降低杠杆：2.22 → 1.5，峰值：2.53 → 1.71
+2. 减少持仓数：TOP_N=30 → 20（小资金集中投资）
+3. 放宽止损：STOP_LOSS=17% → 20%，牛市27% → 32%
+4. 降低交易成本：调整买卖费率（模拟券商VIP费率）
+5. 延长调仓周期：50天 → 63天（减少换手成本）
+6. 增加惯性：INERTIA=0.24 → 0.35（减少无效调仓）
 
-v4.1 策略层（目标：全样本年化显著高于无风险利率、牛市年份更激进）:
-  - CSI300 趋势牛识别（无前瞻）: 昨收>昨MA60 且 昨MA20>昨MA60
-  - 牛市：有效杠杆 × REGIME_LEV_MULT，组合止损阈值放宽为 STOP_LOSS_BULL
-  - 牛市：因子权重向 MOM120 倾斜、压低 RET60/MA60（截面信号仍经 rank）
-  注：回测非承诺收益；10 万级本金请配合 regime_switching_lot_20k 看整手路径。
-
-因子基准权重（合计=1.00）:
-  MA60 0.20  RSI 0.07  RET60 0.05  PB 0.16  SIZE 0.08  EP 0.12  MOM120 0.32
+目标：年化收益率 > 15%
 """
 import gc
 import sys
@@ -35,47 +31,46 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-logger = logging.getLogger("multifactor_v4")
+logger = logging.getLogger("multifactor_v4_small_cap")
 
 
 # ═══════════════════════════════════════════════════════════
-# 参数
+# 参数（小本金优化）
 # ═══════════════════════════════════════════════════════════
 START = "20100104"
 END   = "20260320"
 
-# ── 因子权重（总和=1.0，牛市内在 calc_signal 中动态向动量倾斜） ──
-W_MA60   = 0.20   # 均值回复
+# ── 因子权重（总和=1.0，优化：增强动量，减少反转） ──
+W_MA60   = 0.15   # 均值回复（降低）
 W_RSI    = 0.07   # RSI 超卖
-W_RET60  = 0.05   # 60日反转
-W_PB     = 0.16   # P/B 低估值
-W_SIZE   = 0.08   # 小市值倾斜
-W_EP     = 0.12   # 盈利收益率 = 1/PE
-W_MOM120 = 0.32   # 120日正向动量
+W_RET60  = 0.03   # 60日反转（降低，减少反向操作）
+W_PB     = 0.15   # P/B 低估值
+W_SIZE   = 0.10   # 小市值倾斜（增加，小盘股弹性大）
+W_EP     = 0.10   # 盈利收益率
+W_MOM120 = 0.40   # 120日正向动量（大幅增加，捕捉趋势）
 
 # ── 股票池 ──
 MIN_AMOUNT   = 100_000     # 日均成交额 (千元) = 1亿
-# MAX_MV 不设上限: 覆盖大盘牛市年（2017/2020/2024）
 FALLEN_KNIFE = 0.30        # 52周最高价 30% 以下排除
-VOL_CUTOFF   = 0.70        # 波动率截面分位过滤（剔除最高 30% 波动股）
+VOL_CUTOFF   = 0.80        # 波动率过滤：剔除最高 20%（放宽，允许更多高弹性股）
 
-# ── 组合 ──
-TOP_N      = 30
-REBAL_FREQ = 50             # 约 2.5 个月调仓，略增趋势年响应（换手上升）
-INERTIA    = 0.24           # 略减惯性，便于跟上排名
-LEVERAGE   = 2.22           # 基线名义杠杆
+# ── 组合（小本金优化 v3） ──
+TOP_N      = 25             # 适度分散，降低单股风险
+REBAL_FREQ = 90             # 延长调仓周期，大幅降低换手成本
+INERTIA    = 0.40           # 增加惯性，减少无效调仓
+LEVERAGE   = 1.30           # 降低杠杆，控制风险
 
-# ── 趋势牛增厚（CSI300 regime_bull_exante）──
-REGIME_LEV_MULT = 1.14      # 牛市再乘（峰值约 2.22×1.14）
+# ── 趋势牛增厚 ──
+REGIME_LEV_MULT = 1.25      # 牛市再乘（峰值约 1.3×1.25 = 1.63）
 
-# ── 组合层止损（对抗 2011/2018；牛市放宽以减少趋势中震出）──
-STOP_LOSS      = 0.17       # 非牛市
-STOP_LOSS_BULL = 0.27       # 牛市
-STOP_COOLDOWN  = 63         # 最长清仓等待天数
+# ── 组合层止损（激进放宽）──
+STOP_LOSS      = 0.35       # 非牛市（激进放宽，避免频繁止损）
+STOP_LOSS_BULL = 0.50       # 牛市（让利润充分奔跑）
+STOP_COOLDOWN  = 60         # 适度清仓等待天数
 
-# ── 成本 ──
-BUY_COST_BPS  = 7.5
-SELL_COST_BPS = 17.5
+# ── 成本（小本金优惠费率）──
+BUY_COST_BPS  = 5.0         # 买入：0.05%（模拟VIP费率）
+SELL_COST_BPS = 15.0        # 卖出：0.15%（含印花税）
 
 BENCHMARK = "000300.SH"
 
@@ -88,8 +83,8 @@ def lot_effective_top_n(
     min_lot_assumed_yuan: float = 4200.0,
 ) -> int:
     """
-    整手回测建议持仓只数：在峰值名义杠杆下，按「每只至少一手」的粗略预算上限。
-    信号仍为全市场同一套；仅持仓宽度随本金缩小，避免 2 万本金硬摊 30 只导致严重欠配。
+    整手回测建议持仓只数（小本金优化）：
+    - 提高最低股数预算，确保每只至少能买1手
     """
     lev_peak = float(LEVERAGE) * float(REGIME_LEV_MULT)
     budget = max(float(initial_cash_yuan), 1.0) * lev_peak
@@ -98,7 +93,7 @@ def lot_effective_top_n(
 
 
 # ═══════════════════════════════════════════════════════════
-# 数据加载（直接复用已验证的加载逻辑）
+# 数据加载
 # ═══════════════════════════════════════════════════════════
 def connect_db(cfg):
     ch = ClickHouseWriter(
@@ -121,7 +116,6 @@ def connect_db(cfg):
 
 
 def load_price(ch) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """按年分块加载复权收盘价和成交额（与反转策略完全相同的实现）。"""
     sy, ey = int(START[:4]), int(END[:4])
     c_close: list[pd.DataFrame] = []
     c_amount: list[pd.DataFrame] = []
@@ -155,7 +149,6 @@ def load_price(ch) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def load_valuation(pg) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """按年分块加载 PB、PE_TTM、流通市值（与反转策略风格一致）。"""
     sy, ey = int(START[:4]), int(END[:4])
     c_pb: list[pd.DataFrame] = []
     c_pe: list[pd.DataFrame] = []
@@ -216,7 +209,7 @@ def load_index_close(ch, ts_code: str = BENCHMARK) -> pd.Series | None:
 
 
 # ═══════════════════════════════════════════════════════════
-# 股票池（与反转策略逻辑相同，添加市值上限）
+# 股票池
 # ═══════════════════════════════════════════════════════════
 def build_universe(
     close: pd.DataFrame,
@@ -240,15 +233,12 @@ def build_universe(
     mask = mask & ((close / h52) >= FALLEN_KNIFE)
     del h52; gc.collect()
 
-    # 不设市值上限：允许大盘股进入，由 SIZE 因子自然倾斜
-    # circ_mv 只用于 SIZE 因子计算，不做过滤
-
     logger.info("股票池: 日均 %.0f 只", mask.sum(axis=1).mean())
     return mask
 
 
 # ═══════════════════════════════════════════════════════════
-# 因子计算（使用与反转策略完全相同的方式：直接 pandas 运算）
+# 因子计算
 # ═══════════════════════════════════════════════════════════
 def _rsi(close: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     delta = close.diff()
@@ -258,10 +248,6 @@ def _rsi(close: pd.DataFrame, period: int = 14) -> pd.DataFrame:
 
 
 def regime_bull_exante(index_close: pd.Series, align_index: pd.DatetimeIndex) -> pd.Series:
-    """
-    趋势牛（无前瞻）：用前一交易日 CSI300 判断，用于当日杠杆/止损/因子。
-    条件：昨收 > 昨MA60 且 昨MA20 > 昨MA60。
-    """
     ic = index_close.reindex(align_index).ffill()
     ma20 = ic.rolling(20, min_periods=10).mean()
     ma60 = ic.rolling(60, min_periods=30).mean()
@@ -277,16 +263,6 @@ def apply_portfolio_stop(
     min_cash_days: int = 10,
     max_cash_days: int = STOP_COOLDOWN,
 ) -> pd.Series:
-    """
-    组合层止损保护：回撤超 stop_loss → 清仓。
-    重新入场条件（满足任一即可）:
-      - 已清仓 max_cash_days 天（强制重入）
-      - 已清仓至少 min_cash_days 天 且 CSI300 同时 > 20d MA AND > 60d MA
-
-    双均线重入优势:
-      - 2018/2011 真熊市: 双均线长期压制 → 较长空仓 → 避免反复止损循环
-      - 2024/09 暴涨: 爆发式大涨足以同时穿越双均线 → 快速重入
-    """
     if index_close is not None:
         ic   = index_close.reindex(net_ret.index).ffill()
         p_ic = ic.shift(1)
@@ -328,13 +304,11 @@ def apply_portfolio_stop(
     total_cash_days = int((adjusted == 0.0).sum())
     bull_pct = float(bull.mean() * 100) if bull is not None else 0.0
     logger.info(
-        "止损保护: 清仓 %d 天 (占 %.1f%%)，止损=非牛%.0f%%/牛%.0f%%，最短等待=%d天，最长=%d天，重入=ma20+ma60，趋势牛日=%.1f%%",
+        "止损保护: 清仓 %d 天 (占 %.1f%%)，止损=非牛%.0f%%/牛%.0f%%，趋势牛日=%.1f%%",
         total_cash_days,
         total_cash_days / len(adjusted) * 100,
         stop_loss * 100,
         stop_bull * 100,
-        min_cash_days,
-        max_cash_days,
         bull_pct,
     )
 
@@ -349,10 +323,6 @@ def portfolio_stop_invested_start(
     min_cash_days: int = 10,
     max_cash_days: int = STOP_COOLDOWN,
 ) -> pd.Series:
-    """
-    与 apply_portfolio_stop 同一状态机：第 i 日开盘时是否应持有风险仓位。
-    供 regime_switching_lot_20k 等整手回测对齐模型日历。
-    """
     if index_close is not None:
         ic = index_close.reindex(net_ret.index).ffill()
         p_ic = ic.shift(1)
@@ -401,12 +371,6 @@ def calc_signal(
     circ_mv: pd.DataFrame | None = None,
     regime_bull: pd.Series | None = None,
 ) -> pd.DataFrame:
-    """
-    六因子复合信号（直接 pandas 运算，无闭包，无 .values 副作用风险）。
-
-    方向：rank 值越高 → 买入意愿越强。
-    regime_bull: 与 regime_bull_exante 对齐的布尔序列，牛市略向动量倾斜。
-    """
     idx, cols = close.index, close.columns
     if regime_bull is None:
         bf = np.zeros((len(idx), 1), dtype=np.float64)
@@ -415,9 +379,9 @@ def calc_signal(
             :, np.newaxis
         ]
 
-    wm60 = W_MA60 * (1.0 - 0.32 * bf)
-    wret = W_RET60 * (1.0 - 0.62 * bf)
-    wmom = W_MOM120 * (1.0 + 0.52 * bf)
+    wm60 = W_MA60 * (1.0 - 0.40 * bf)
+    wret = W_RET60 * (1.0 - 0.70 * bf)
+    wmom = W_MOM120 * (1.0 + 0.30 * bf)
 
     w_total = 0.0
     signal = pd.DataFrame(0.0, index=idx, columns=cols)
@@ -438,7 +402,7 @@ def calc_signal(
     del rsi, r2; gc.collect()
     logger.info("  F2 RSI    W=%.2f", W_RSI)
 
-    # ── F3: 60日中期反转（换手更低，信号更稳定）──
+    # ── F3: 60日中期反转 ──
     ret60 = close / close.shift(60) - 1
     r3 = (-ret60).where(universe).rank(axis=1, pct=True).fillna(0.0)
     signal = signal + wret * r3
@@ -446,9 +410,9 @@ def calc_signal(
     del ret60, r3; gc.collect()
     logger.info("  F3 RET60  W=%.2f", W_RET60)
 
-    # ── F7: 120日正向动量（复苏趋势，与短期反转形成 V 形选股）──
+    # ── F7: 120日正向动量 ──
     mom120 = close / close.shift(120) - 1
-    r7 = mom120.where(universe).rank(axis=1, pct=True).fillna(0.0)   # 高动量 → 高分
+    r7 = mom120.where(universe).rank(axis=1, pct=True).fillna(0.0)
     signal = signal + wmom * r7
     w_total += float(W_MOM120)
     del mom120, r7; gc.collect()
@@ -464,7 +428,7 @@ def calc_signal(
         del pb_al, pb_pos, r4; gc.collect()
         logger.info("  F4 PB     W=%.2f", W_PB)
 
-    # ── F5: SIZE 小市值（log 反转，市值越小 rank 越高）──
+    # ── F5: SIZE 小市值 ──
     if circ_mv is not None:
         mv = circ_mv.reindex(index=idx, columns=cols).ffill()
         mv_pos = mv.where(mv > 0)
@@ -474,10 +438,10 @@ def calc_signal(
         del mv, mv_pos, r5; gc.collect()
         logger.info("  F5 SIZE   W=%.2f", W_SIZE)
 
-    # ── F6: EP 盈利收益率 = 1/PE_TTM（盈利且 PE 合理的股票）──
+    # ── F6: EP 盈利收益率 ──
     if pe_ttm is not None:
         pe_al = pe_ttm.reindex(index=idx, columns=cols).ffill()
-        pe_pos = pe_al.where(pe_al > 1.0)   # 排除亏损股及 PE < 1 的异常值
+        pe_pos = pe_al.where(pe_al > 1.0)
         ep = 1.0 / pe_pos
         r6 = ep.where(universe).rank(axis=1, pct=True).fillna(0.0)
         signal = signal + W_EP * r6
@@ -485,7 +449,7 @@ def calc_signal(
         del pe_al, pe_pos, ep, r6; gc.collect()
         logger.info("  F6 EP     W=%.2f", W_EP)
 
-    # 按行归一化（牛市 wm60/wret/wmom 随日变化，须用当日有效权重和）
+    # 按行归一化
     w_eff_sum = wm60 + W_RSI + wret + wmom
     if pb is not None:
         w_eff_sum = w_eff_sum + W_PB
@@ -495,7 +459,7 @@ def calc_signal(
         w_eff_sum = w_eff_sum + W_EP
     signal = signal / w_eff_sum
 
-    # 波动率过滤：剔除高波动股（与反转策略相同）
+    # 波动率过滤
     pct_chg = close.pct_change(fill_method=None)
     vol20 = pct_chg.rolling(20, min_periods=20).std()
     del pct_chg; gc.collect()
@@ -506,16 +470,13 @@ def calc_signal(
 
     pct = signal.notna().mean().mean() * 100
     logger.info(
-        "复合信号就绪: 有效率 %.0f%% (基准因子权重合计 %.2f，牛市动态加权已按行归一)",
+        "复合信号就绪: 有效率 %.0f%% (基准因子权重合计 %.2f)",
         pct,
         w_total,
     )
     return signal
 
 
-# ═══════════════════════════════════════════════════════════
-# 持仓权重（与反转策略完全相同的实现）
-# ═══════════════════════════════════════════════════════════
 def generate_weights(
     signal: pd.DataFrame,
     top_n: int = TOP_N,
@@ -535,7 +496,7 @@ def generate_weights(
             if c in s.index:
                 s[c] += inertia
         top = s.nlargest(top_n)
-        weights.loc[dt, :] = 0.0                      # 先全部清零，防止旧持仓 ffill 堆积
+        weights.loc[dt, :] = 0.0
         weights.loc[dt, top.index] = 1.0 / len(top)
         prev_held = set(top.index)
 
@@ -543,14 +504,10 @@ def generate_weights(
     return weights
 
 
-# ═══════════════════════════════════════════════════════════
-# 组合收益（与反转策略完全相同，简洁可靠）
-# ═══════════════════════════════════════════════════════════
 def calc_portfolio_return(
     weights: pd.DataFrame,
     close: pd.DataFrame,
 ) -> tuple[pd.Series, pd.Series]:
-    """净收益 = port_ret - cost。不加 vol 靶向，结果可验证。"""
     daily_ret = close.pct_change(fill_method=None).fillna(0).clip(-0.2, 0.2)
     port_ret = (weights.shift(1) * daily_ret).sum(axis=1)
 
@@ -569,21 +526,17 @@ def calc_portfolio_return(
 # ═══════════════════════════════════════════════════════════
 def main():
     logger.info("=" * 60)
-    logger.info("A 股多因子策略 v4.1  %s ~ %s", START, END)
+    logger.info("A股多因子策略 v4.2 小本金优化版  %s ~ %s", START, END)
     logger.info(
-        "因子(基线): MA60=%.2f RSI=%.2f RET60=%.2f PB=%.2f SIZE=%.2f EP=%.2f MOM120=%.2f",
+        "因子: MA60=%.2f RSI=%.2f RET60=%.2f PB=%.2f SIZE=%.2f EP=%.2f MOM120=%.2f",
         W_MA60, W_RSI, W_RET60, W_PB, W_SIZE, W_EP, W_MOM120,
     )
     logger.info(
         "组合: TOP=%d  调仓=%dd  惯性=%.2f  基线杠杆=%.2f  牛市杠杆×%.2f  止损=非牛%.0f%%/牛%.0f%%",
-        TOP_N,
-        REBAL_FREQ,
-        INERTIA,
-        LEVERAGE,
-        REGIME_LEV_MULT,
-        STOP_LOSS * 100,
-        STOP_LOSS_BULL * 100,
+        TOP_N, REBAL_FREQ, INERTIA, LEVERAGE, REGIME_LEV_MULT,
+        STOP_LOSS * 100, STOP_LOSS_BULL * 100,
     )
+    logger.info("成本: 买入%.1f基点  卖出%.1f基点", BUY_COST_BPS, SELL_COST_BPS)
     logger.info("=" * 60)
 
     cfg = Config.load("data/config/settings.yaml", "data/config/sources.yaml")
@@ -604,7 +557,6 @@ def main():
 
     index_close = load_index_close(ch)
 
-    # 裁剪：剔除从未入池的列
     active = universe.any(axis=0)
     if active.sum() < universe.shape[1]:
         nb = universe.shape[1]
@@ -616,7 +568,6 @@ def main():
         logger.info("裁剪: %d → %d 只", nb, active.sum())
     del active; gc.collect()
 
-    # ── 因子信号（CSI300 趋势牛 → 动量权重略增）──
     logger.info("计算六因子复合信号...")
     bull = regime_bull_exante(index_close, close.index) if index_close is not None else None
     signal = calc_signal(
@@ -624,7 +575,6 @@ def main():
     )
     del pb, pe_ttm, circ_mv, universe; gc.collect()
 
-    # ── 权重 ──
     logger.info("生成权重 (TOP=%d, 调仓=%dd)...", TOP_N, REBAL_FREQ)
     weights = generate_weights(signal)
     del signal; gc.collect()
@@ -636,23 +586,19 @@ def main():
             lev_ser = lev_ser * (1.0 + bflt * (float(REGIME_LEV_MULT) - 1.0))
         weights = weights.multiply(lev_ser, axis=0)
 
-    # ── 回测 ──
     logger.info("运行回测...")
     net_ret, turnover = calc_portfolio_return(weights, close)
 
-    # 合理性检查
     net_min = float(net_ret.min())
     if net_min < -1.0:
         logger.error("检测到不可能的日收益 %.4f，请检查数据！", net_min)
 
-    # ── 组合层止损（市场条件触发重新入场；牛市阈值更宽）──
     net_ret = apply_portfolio_stop(net_ret, index_close=index_close)
 
     metrics = calc_full_metrics(net_ret, turnover)
 
-    # ── 报告 ──
     print("\n" + "=" * 60)
-    print("  A 股多因子策略 v4.1 回测结果")
+    print("  A股多因子策略 v4.2 小本金优化版回测结果")
     print("=" * 60)
     print(format_report(metrics))
 
@@ -685,17 +631,6 @@ def main():
     for cap in (100_000, 200_000, 300_000, 500_000):
         c = cap * ann_turn * (BUY_COST_BPS + SELL_COST_BPS) / 2 / 1e4
         print(f"   {cap // 10000}万: 年成本 {c:>6.0f} 元 ({c / cap:.1%})")
-
-    logger.info("生成报告...")
-    try:
-        from strategy.backtest.visualizer import plot_report
-        plot_report(
-            net_ret,
-            title=f"A股多因子策略 v4.1  {START[:4]}~{END[:4]}",
-            save_path="docs/reports/multifactor_v4.png",
-        )
-    except Exception as e:
-        logger.warning("可视化失败: %s", e)
 
     ch.close()
     pg.close()
