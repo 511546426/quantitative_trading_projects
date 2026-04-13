@@ -2,18 +2,24 @@ import { CloudOutlined, FolderOpenOutlined, SafetyOutlined } from "@ant-design/i
 import { Card, Col, Descriptions, Row, Statistic, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import client, { fetchMeta, type MetaResponse } from "../api/client";
+import { fetchHealth, fetchMeta, type HealthResponse, type MetaResponse } from "../api/client";
 
 export default function DashboardPage() {
   const [meta, setMeta] = useState<MetaResponse | null>(null);
-  const [health, setHealth] = useState<string>("…");
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthErr, setHealthErr] = useState(false);
 
   useEffect(() => {
     fetchMeta().then(setMeta).catch(() => setMeta(null));
-    client
-      .get("/api/health")
-      .then(() => setHealth("正常"))
-      .catch(() => setHealth("不可达"));
+    fetchHealth()
+      .then((h) => {
+        setHealth(h);
+        setHealthErr(false);
+      })
+      .catch(() => {
+        setHealth(null);
+        setHealthErr(true);
+      });
   }, []);
 
   return (
@@ -29,7 +35,11 @@ export default function DashboardPage() {
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
           <Card bordered={false}>
-            <Statistic title="API 健康" value={health} prefix={<SafetyOutlined />} />
+            <Statistic
+              title="API 健康"
+              value={healthErr ? "不可达" : health?.ok ? "正常" : "…"}
+              prefix={<SafetyOutlined />}
+            />
           </Card>
         </Col>
         <Col xs={24} md={8}>
@@ -47,6 +57,25 @@ export default function DashboardPage() {
               title="鉴权"
               value={meta?.auth_required ? "需要 API Key" : "开放（仅内网）"}
             />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card bordered={false}>
+            <Statistic
+              title="服务端时间 (UTC)"
+              value={health?.server_time_utc ?? "—"}
+              valueStyle={{ fontSize: 16 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card bordered={false}>
+            <Statistic title="API 版本" value={health?.version ?? "—"} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card bordered={false}>
+            <Statistic title="构建标识" value={health?.build_id || meta?.build_id || "—"} />
           </Card>
         </Col>
       </Row>

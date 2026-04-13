@@ -19,9 +19,10 @@ import {
 } from "antd";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { fetchMeta } from "../api/client";
+import { fetchHealth, fetchMeta } from "../api/client";
+import { getHttpTrace, subscribeHttpTrace } from "../api/traceStore";
 
-const { Header, Sider, Content } = Layout;
+const { Header, Sider, Content, Footer } = Layout;
 
 const menu = [
   { key: "/", icon: <DashboardOutlined />, label: "总览" },
@@ -37,12 +38,45 @@ export default function AppShell() {
   const [authRequired, setAuthRequired] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [keyForm] = Form.useForm();
+  const [, traceTick] = useState(0);
+  const [healthClock, setHealthClock] = useState<string | null>(null);
+  const [healthOk, setHealthOk] = useState<boolean | null>(null);
+  const [healthPolledAt, setHealthPolledAt] = useState<string | null>(null);
 
   useEffect(() => {
     fetchMeta()
       .then((m) => setAuthRequired(m.auth_required))
       .catch(() => {});
   }, []);
+
+  useEffect(() => subscribeHttpTrace(() => traceTick((n) => n + 1)), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => {
+      fetchHealth()
+        .then((h) => {
+          if (cancelled) return;
+          setHealthOk(!!h.ok);
+          setHealthClock(h.server_time_utc ?? null);
+          setHealthPolledAt(new Date().toISOString());
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setHealthOk(false);
+          setHealthClock(null);
+          setHealthPolledAt(new Date().toISOString());
+        });
+    };
+    poll();
+    const id = window.setInterval(poll, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const trace = getHttpTrace();
 
   const hasKey = !!localStorage.getItem("quant_ops_api_key");
 
@@ -94,9 +128,56 @@ export default function AppShell() {
             </Button>
           </Space>
         </Header>
-        <Content style={{ margin: 20 }}>
+        <Content style={{ margin: 20, paddingBottom: 8 }}>
           <Outlet />
         </Content>
+        <Footer
+          style={{
+            margin: 0,
+            padding: "8px 20px",
+            borderTop: "1px solid #1e2836",
+            background: "#0c1017",
+            fontSize: 11,
+            color: "rgba(255,255,255,0.45)",
+            lineHeight: 1.5,
+          }}
+        >
+          <Space size="middle" wrap split={<span style={{ color: "#1e2836" }}>|</span>}>
+            <span>
+              健康检查 UTC{" "}
+              <Typography.Text code style={{ fontSize: 11, color: "rgba(255,255,255,0.65)" }}>
+                {healthClock ?? "—"}
+              </Typography.Text>
+            </span>
+            <span>
+              状态{" "}
+              {healthOk === null ? "…" : healthOk ? <Badge status="success" text="可达" /> : <Badge status="error" text="不可达" />}
+            </span>
+            <span>
+              轮询本地{" "}
+              <Typography.Text code style={{ fontSize: 11, color: "rgba(255,255,255,0.65)" }}>
+                {healthPolledAt ? healthPolledAt.slice(11, 23) : "—"}
+              </Typography.Text>
+            </span>
+            <span>
+              最近响应头{" "}
+              <Typography.Text code style={{ fontSize: 11, color: "rgba(255,255,255,0.65)" }}>
+                {trace.serverTimeHeader ?? "—"}
+              </Typography.Text>
+            </span>
+            <span>
+              X-Request-ID{" "}
+              <Typography.Text
+                code
+                copyable={!!trace.requestId}
+                style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", maxWidth: 280 }}
+                ellipsis
+              >
+                {trace.requestId ?? "—"}
+              </Typography.Text>
+            </span>
+          </Space>
+        </Footer>
       </Layout>
 
       <Drawer

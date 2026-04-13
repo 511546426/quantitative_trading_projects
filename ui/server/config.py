@@ -19,3 +19,5 @@ LOG_PATHS: dict[str, Path] = {
 TIMEOUT_SYNC = int(os.environ.get("QUANT_OPS_SYNC_TIMEOUT", "120"))
 # If set, HTTP (except /api/health) and WebSocket require X-API-Key or ?token=
 API_KEY = os.environ.get("QUANT_OPS_API_KEY", "").strip()
+# Optional: CI/git SHA shown in /api/health and /api/meta for deployment traceability
+BUILD_ID = os.environ.get("QUANT_OPS_BUILD_ID", "").strip()

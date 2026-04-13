@@ -18,10 +18,12 @@ from typing import Any, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
-from ui.server.config import API_KEY, LOG_PATHS, OPS_SH, PROJECT_DIR
+from ui.server.config import API_KEY, BUILD_ID, LOG_PATHS, OPS_SH, PROJECT_DIR
 from ui.server.deps import require_api_key
+from ui.server.middleware import RequestContextMiddleware, utc_http_timestamp
 from ui.server import ops_runner
 from ui.server.research import router as research_router
 
@@ -56,23 +58,37 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "X-Server-Time"],
 )
+app.add_middleware(RequestContextMiddleware)
 
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "service": "quant-ops-api"}
+    body: dict[str, Any] = {
+        "ok": True,
+        "service": "quant-ops-api",
+        "server_time_utc": utc_http_timestamp(),
+        "version": app.version,
+    }
+    if BUILD_ID:
+        body["build_id"] = BUILD_ID
+    return body
 
 
 @app.get("/api/meta")
 async def meta() -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "project_dir": str(PROJECT_DIR),
         "ops_sh": str(OPS_SH),
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "auth_required": bool(API_KEY),
         "log_paths": {k: str(v) for k, v in LOG_PATHS.items()},
+        "server_time_utc": utc_http_timestamp(),
     }
+    if BUILD_ID:
+        out["build_id"] = BUILD_ID
+    return out
 
 
 class SyncOpRequest(BaseModel):
@@ -225,4 +241,23 @@ app.include_router(research_router)
 
 
 if DIST_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=str(DIST_DIR), html=True), name="spa")
+    app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="spa-assets")
+
+    @app.get("/")
+    async def spa_root() -> FileResponse:
+        return FileResponse(DIST_DIR / "index.html")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str) -> FileResponse:
+        """
+        SPA fallback: for client-side routes like /jobs, always return index.html.
+        If the requested path maps to an existing static file under dist/, return that file.
+        """
+        candidate = (DIST_DIR / full_path).resolve()
+        try:
+            candidate.relative_to(DIST_DIR.resolve())
+        except ValueError:
+            return FileResponse(DIST_DIR / "index.html")
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(DIST_DIR / "index.html")

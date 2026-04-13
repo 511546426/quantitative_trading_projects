@@ -304,6 +304,8 @@ python3 strategy/examples/regime_switching_lot_20k.py --show-model
 
 **CORS**：默认允许本机 `5173` / `8787`；其他来源可设 `QUANT_OPS_CORS`（逗号分隔 Origin）。
 
+**可观测与排障（与控制台页脚一致）**：每个 HTTP 响应带 `X-Request-ID`（可客户端传入同名请求头，否则服务端生成 UUID）与 `X-Server-Time`（UTC）；访问日志写入 logger `quant.ops.http`。`GET /api/health` 与 `GET /api/meta` 的 JSON 中含 `server_time_utc`；可选环境变量 `QUANT_OPS_BUILD_ID`（如 git SHA）会出现在 health/meta 与总览「构建标识」中。
+
 **单股 K 线与简易回测**（Web 侧栏「单股研究」）：依赖已回填的 ClickHouse `stock_daily` 与 PostgreSQL `stock_info`。主要接口（均需 `X-API-Key`，若已启用鉴权）：
 
 - `GET /api/research/stocks?q=`：按代码/名称模糊搜索；
