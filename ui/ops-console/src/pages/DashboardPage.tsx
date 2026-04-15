@@ -100,6 +100,10 @@ export default function DashboardPage() {
             <Link to="/logs">日志流</Link>
             <span style={{ margin: "0 8px", color: "#555" }}>|</span>
             <Link to="/research">单股研究</Link>
+            <span style={{ margin: "0 8px", color: "#555" }}>|</span>
+            <Link to="/backtest">回测看板</Link>
+            <span style={{ margin: "0 8px", color: "#555" }}>|</span>
+            <Link to="/portfolio">持仓与流水</Link>
           </Descriptions.Item>
         </Descriptions>
       </Card>

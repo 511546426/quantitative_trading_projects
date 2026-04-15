@@ -12,7 +12,6 @@ import {
   Row,
   Select,
   Typography,
-  message,
 } from "antd";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
@@ -26,50 +25,7 @@ import {
 } from "lightweight-charts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import client from "../api/client";
-
-type BarRow = {
-  time: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  adj_close: number;
-};
-
-type EquityRow = { time: string; strategy_equity: number; benchmark_equity: number };
-
-type SimpleRun = {
-  mode: "simple";
-  ts_code: string;
-  name: string;
-  strategy: string;
-  fast_ma: number;
-  slow_ma: number;
-  bars: BarRow[];
-  equity: EquityRow[];
-  metrics: Record<string, number>;
-  approx_position_changes: number;
-};
-
-type RegimeSeriesRow = {
-  time: string;
-  portfolio_equity: number;
-  stock_benchmark_equity: number;
-  model_weight: number;
-};
-
-type RegimeRun = {
-  mode: "regime";
-  ts_code: string;
-  name: string;
-  model: string;
-  bars: BarRow[];
-  series: RegimeSeriesRow[];
-  metrics_portfolio: Record<string, number | string | null | undefined>;
-};
-
-type RunState = SimpleRun | RegimeRun | null;
+import { clearResearchRun, startRegimeRun, startSimpleRun, useResearchRun } from "../researchRunStore";
 
 function pct(n: number | string | null | undefined): string {
   if (n === null || n === undefined) return "—";
@@ -88,8 +44,7 @@ export default function StockResearchPage() {
   const [strategy, setStrategy] = useState<"buy_hold" | "ma_cross">("ma_cross");
   const [fastMa, setFastMa] = useState(5);
   const [slowMa, setSlowMa] = useState(20);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<RunState>(null);
+  const { loading, result } = useResearchRun();
   const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
   const searchTimer = useRef<number>(0);
 
@@ -236,37 +191,21 @@ export default function StockResearchPage() {
     };
   }, [result]);
 
-  async function run() {
+  function run() {
     const start = range[0].format("YYYYMMDD");
     const end = range[1].format("YYYYMMDD");
-    setLoading(true);
-    setResult(null);
-    try {
-      if (engineMode === "simple") {
-        const { data } = await client.post<Omit<SimpleRun, "mode">>("/api/research/single-stock-run", {
-          ts_code: tsCode.trim().toUpperCase(),
-          start,
-          end,
-          strategy,
-          fast_ma: fastMa,
-          slow_ma: slowMa,
-        });
-        setResult({ ...data, mode: "simple" });
-        message.success("回测完成");
-      } else {
-        const { data } = await client.post<Omit<RegimeRun, "mode">>(
-          "/api/research/regime-model-run",
-          { ts_code: tsCode.trim().toUpperCase(), start, end },
-          { timeout: 600_000 },
-        );
-        setResult({ ...data, mode: "regime" });
-        message.success("多因子管线回测完成（全市场加载，可能较慢）");
-      }
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string }; status?: number } };
-      message.error(err.response?.data?.detail ?? "请求失败");
-    } finally {
-      setLoading(false);
+    const code = tsCode.trim().toUpperCase();
+    if (engineMode === "simple") {
+      void startSimpleRun({
+        ts_code: code,
+        start,
+        end,
+        strategy,
+        fast_ma: fastMa,
+        slow_ma: slowMa,
+      });
+    } else {
+      void startRegimeRun(code, start, end);
     }
   }
 
@@ -289,7 +228,7 @@ export default function StockResearchPage() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="多因子模式会按年加载全市场行情与估值，首次计算可能占用数 GB 内存并耗时数分钟，请仅在数据已回填的机器上使用。"
+          message="多因子模式会按年加载全市场行情与估值，首次计算可能占用数 GB 内存并耗时数分钟，请仅在数据已回填的机器上使用。切换侧栏其他页面不会中断服务端计算；完成后会有提示，返回本页即可查看图表。"
         />
       )}
 
@@ -377,9 +316,14 @@ export default function StockResearchPage() {
             <Typography.Text type="secondary" style={{ opacity: 0 }}>
               .
             </Typography.Text>
-            <Button type="primary" block loading={loading} onClick={() => void run()} style={{ marginTop: 6 }}>
+            <Button type="primary" block loading={loading} onClick={run} style={{ marginTop: 6 }}>
               拉取 K 线并回测
             </Button>
+            {result && (
+              <Button type="link" block disabled={loading} onClick={() => clearResearchRun()} style={{ marginTop: 4 }}>
+                清除图表与结果
+              </Button>
+            )}
           </Col>
         </Row>
       </Card>

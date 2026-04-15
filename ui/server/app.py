@@ -4,6 +4,8 @@ Institutional ops console API: REST + WebSocket log tail + optional SPA static.
 Run (from repo root, PYTHONPATH=.)::
 
     .venv/bin/python -m uvicorn ui.server.app:app --host 127.0.0.1 --port 8787
+
+Use ``./ops.sh web-pro`` so ``QUANT_OPS_BIND`` controls ``--host`` (default loopback).
 """
 
 from __future__ import annotations
@@ -18,13 +20,26 @@ from typing import Any, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
-from ui.server.config import API_KEY, BUILD_ID, LOG_PATHS, OPS_SH, PROJECT_DIR
+from ui.server.boundary import IpAllowlistMiddleware, client_ip_allowed
+from ui.server.config import (
+    ALLOWED_CLIENT_IPS,
+    API_KEY,
+    BIND_HOST,
+    BUILD_ID,
+    LOG_PATHS,
+    OPS_SH,
+    PROJECT_DIR,
+    TRUSTED_HOSTS,
+)
 from ui.server.deps import require_api_key
 from ui.server.middleware import RequestContextMiddleware, utc_http_timestamp
 from ui.server import ops_runner
+from ui.server.backtest_dashboard import router as dashboard_router
+from ui.server.portfolio import router as portfolio_router
 from ui.server.research import router as research_router
 
 DIST_DIR = PROJECT_DIR / "ui" / "ops-console" / "dist"
@@ -52,6 +67,9 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Inner → outer: TrustedHost → IP allowlist → CORS → RequestContext (see Starlette insert(0) order)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
+app.add_middleware(IpAllowlistMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -73,6 +91,11 @@ async def health() -> dict[str, Any]:
     }
     if BUILD_ID:
         body["build_id"] = BUILD_ID
+    body["bind_host"] = BIND_HOST
+    body["network_boundary"] = {
+        "trusted_hosts": TRUSTED_HOSTS if TRUSTED_HOSTS != ["*"] else ["*"],
+        "client_ip_allowlist_enabled": bool(ALLOWED_CLIENT_IPS),
+    }
     return body
 
 
@@ -85,6 +108,11 @@ async def meta() -> dict[str, Any]:
         "auth_required": bool(API_KEY),
         "log_paths": {k: str(v) for k, v in LOG_PATHS.items()},
         "server_time_utc": utc_http_timestamp(),
+        "bind_host": BIND_HOST,
+        "network_boundary": {
+            "trusted_hosts": TRUSTED_HOSTS if TRUSTED_HOSTS != ["*"] else ["*"],
+            "client_ip_allowlist_enabled": bool(ALLOWED_CLIENT_IPS),
+        },
     }
     if BUILD_ID:
         out["build_id"] = BUILD_ID
@@ -165,6 +193,9 @@ async def websocket_log_tail(
     if log_key not in LOG_PATHS:
         await websocket.close(code=4400)
         return
+    if not client_ip_allowed(websocket.client):
+        await websocket.close(code=4403)
+        return
     if not _ws_key_ok(token):
         await websocket.close(code=4401)
         return
@@ -238,6 +269,8 @@ async def websocket_log_tail(
 
 
 app.include_router(research_router)
+app.include_router(dashboard_router)
+app.include_router(portfolio_router)
 
 
 if DIST_DIR.is_dir():

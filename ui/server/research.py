@@ -25,6 +25,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/research", tags=["research"], dependencies=[Depends(require_api_key)])
 
+
+class ResearchSyncError(Exception):
+    """Raised from ``asyncio.to_thread`` workers; mapped to HTTPException in routes."""
+
+    __slots__ = ("status_code", "detail")
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
+
 _TS_CODE_RE = re.compile(r"^[0-9]{6}\.(SH|SZ)$")
 _DATE_RE = re.compile(r"^\d{8}$")
 
@@ -191,7 +202,7 @@ def _run_backtest_series(
         pos = pd.Series(1.0, index=df.index)
     else:
         if fast_ma >= slow_ma or fast_ma < 2:
-            raise HTTPException(400, "ma_cross 需要 fast_ma < slow_ma 且 fast_ma>=2")
+            raise ResearchSyncError(400, "ma_cross 需要 fast_ma < slow_ma 且 fast_ma>=2")
         ma_f = c.rolling(fast_ma, min_periods=fast_ma).mean()
         ma_s = c.rolling(slow_ma, min_periods=slow_ma).mean()
         raw = (ma_f > ma_s).astype(float)
@@ -247,25 +258,25 @@ class SingleStockRunRequest(BaseModel):
     slow_ma: int = Field(20, ge=3, le=250)
 
 
-@router.post("/single-stock-run")
-async def single_stock_run(body: SingleStockRunRequest) -> dict[str, Any]:
-    """拉取 K 线并跑一次简易回测，返回画 K 线 + 净值曲线的数据。"""
-    ts = _validate_ts_code(body.ts_code)
-    s = _norm_ymd(body.start)
-    e = _norm_ymd(body.end)
-    if s > e:
-        raise HTTPException(400, "start 不能晚于 end")
-
+def _single_stock_run_work(
+    ts: str,
+    s: str,
+    e: str,
+    strategy: Literal["buy_hold", "ma_cross"],
+    fast_ma: int,
+    slow_ma: int,
+) -> dict[str, Any]:
+    """CPU/IO-heavy path; runs in a worker thread under ``asyncio.shield``."""
     try:
         df = _fetch_ohlcv_df(ts, s, e)
     except Exception as ex:
         logger.exception("fetch ohlcv failed")
-        raise HTTPException(503, f"ClickHouse 查询失败: {ex}") from ex
+        raise ResearchSyncError(503, f"ClickHouse 查询失败: {ex}") from ex
 
     if df.empty:
-        raise HTTPException(404, "该区间无行情或股票代码不存在")
+        raise ResearchSyncError(404, "该区间无行情或股票代码不存在")
 
-    eq_s, eq_b, turns = _run_backtest_series(df, body.strategy, body.fast_ma, body.slow_ma)
+    eq_s, eq_b, turns = _run_backtest_series(df, strategy, fast_ma, slow_ma)
     metrics = _metrics(eq_s, eq_b, len(df))
 
     name = ""
@@ -288,15 +299,40 @@ async def single_stock_run(body: SingleStockRunRequest) -> dict[str, Any]:
         "name": name,
         "start": s,
         "end": e,
-        "strategy": body.strategy,
-        "fast_ma": body.fast_ma,
-        "slow_ma": body.slow_ma,
+        "strategy": strategy,
+        "fast_ma": fast_ma,
+        "slow_ma": slow_ma,
         "bars": _bars_to_chart(df),
         "equity": _equity_to_chart(df, eq_s, eq_b),
         "metrics": metrics,
         "approx_position_changes": turns,
         "as_of": datetime.utcnow().isoformat() + "Z",
     }
+
+
+@router.post("/single-stock-run")
+async def single_stock_run(body: SingleStockRunRequest) -> dict[str, Any]:
+    """拉取 K 线并跑一次简易回测，返回画 K 线 + 净值曲线的数据。"""
+    ts = _validate_ts_code(body.ts_code)
+    s = _norm_ymd(body.start)
+    e = _norm_ymd(body.end)
+    if s > e:
+        raise HTTPException(400, "start 不能晚于 end")
+
+    try:
+        return await asyncio.shield(
+            asyncio.to_thread(
+                _single_stock_run_work,
+                ts,
+                s,
+                e,
+                body.strategy,
+                body.fast_ma,
+                body.slow_ma,
+            )
+        )
+    except ResearchSyncError as ex:
+        raise HTTPException(ex.status_code, ex.detail) from ex
 
 
 @router.get("/bars")
@@ -340,8 +376,9 @@ async def regime_model_run(body: RegimeModelRunRequest) -> dict[str, Any]:
     e = _norm_ymd(body.end)
     if s > e:
         raise HTTPException(400, "start 不能晚于 end")
+    # Shield: client disconnect / navigation must not cancel the worker thread mid-run.
     try:
-        out = await asyncio.to_thread(run_regime_model_for_web, s, e, ts)
+        out = await asyncio.shield(asyncio.to_thread(run_regime_model_for_web, s, e, ts))
     except ValueError as ex:
         raise HTTPException(400, str(ex)) from ex
     except Exception as ex:
@@ -365,7 +402,7 @@ async def regime_model_run(body: RegimeModelRunRequest) -> dict[str, Any]:
 
     out["name"] = name
     try:
-        df_b = await asyncio.to_thread(_fetch_ohlcv_df, ts, s, e)
+        df_b = await asyncio.shield(asyncio.to_thread(_fetch_ohlcv_df, ts, s, e))
         out["bars"] = _bars_to_chart(df_b) if not df_b.empty else []
     except Exception:
         out["bars"] = []

@@ -48,6 +48,11 @@ export type MetaResponse = {
   log_paths: Record<string, string>;
   server_time_utc?: string;
   build_id?: string;
+  bind_host?: string;
+  network_boundary?: {
+    trusted_hosts: string[];
+    client_ip_allowlist_enabled: boolean;
+  };
 };
 
 export async function fetchMeta(): Promise<MetaResponse> {
@@ -61,6 +66,11 @@ export type HealthResponse = {
   server_time_utc: string;
   version?: string;
   build_id?: string;
+  bind_host?: string;
+  network_boundary?: {
+    trusted_hosts: string[];
+    client_ip_allowlist_enabled: boolean;
+  };
 };
 
 export async function fetchHealth(): Promise<HealthResponse> {

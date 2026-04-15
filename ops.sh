@@ -37,6 +37,7 @@ Commands:
 
   web [port]             Start Streamlit Web 运维界面 (default port 8501)
   web-pro [port]         Start FastAPI + 机构级 React 控制台 API (default 8787)
+                         监听地址: QUANT_OPS_BIND (default 127.0.0.1，勿轻易 0.0.0.0)
                          前端开发: cd ui/ops-console && npm i && npm run dev
                          生产: cd ui/ops-console && npm run build 后同源托管静态资源
 
@@ -317,16 +318,20 @@ main() {
       ;;
     web-pro)
       port="${1:-8787}"
+      bind="${QUANT_OPS_BIND:-127.0.0.1}"
       py="${PROJECT_DIR}/.venv/bin/python"
       if [[ ! -x "${py}" ]]; then
         echo "[ERROR] venv python not found: ${py}" >&2
         exit 1
       fi
-      echo "[INFO] Ops API (FastAPI): http://127.0.0.1:${port}/api/health"
+      echo "[INFO] Ops API (FastAPI): http://${bind}:${port}/api/health  (QUANT_OPS_BIND=${bind})"
+      if [[ "${bind}" == "0.0.0.0" ]] || [[ "${bind}" == "::" ]]; then
+        echo "[WARN] Listening on all interfaces — prefer SSH tunnel or reverse proxy + TLS for remote access." >&2
+      fi
       echo "[INFO] 若已 npm run build，则静态 UI 同源根路径 /"
       echo "[INFO] 开发前端: 另开终端 cd ui/ops-console && npm run dev （Vite 代理 /api → 本端口）"
-      cd "${PROJECT_DIR}" && exec env PYTHONPATH="${PROJECT_DIR}" \
-        "${py}" -m uvicorn ui.server.app:app --host 127.0.0.1 --port "${port}" \
+      cd "${PROJECT_DIR}" && exec env PYTHONPATH="${PROJECT_DIR}" QUANT_OPS_BIND="${bind}" \
+        "${py}" -m uvicorn ui.server.app:app --host "${bind}" --port "${port}" \
         --timeout-graceful-shutdown 5
       ;;
     *)
