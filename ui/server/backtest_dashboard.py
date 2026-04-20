@@ -20,9 +20,42 @@ from ui.server.research import (
     _ch,
     _fetch_ohlcv_df,
     _norm_ymd,
-    _run_backtest_series,
     _validate_ts_code,
 )
+
+
+def _run_backtest_series(
+    df: pd.DataFrame,
+    strategy: Literal["buy_hold", "ma_cross"],
+    fast_ma: int,
+    slow_ma: int,
+) -> tuple[pd.Series, pd.Series, int]:
+    """
+    单股 adj_close 日收益上跑买入持有或双均线（信号用 T-1 均线，无前瞻），
+    返回 (策略净值乘数, 标的买入持有净值乘数, 近似换仓次数)。
+    净值首日归一为 1.0，与看板前端画图一致。
+    """
+    price = df["adj_close"].astype(float)
+    ret = price.pct_change(fill_method=None).fillna(0.0).clip(-0.2, 0.2)
+
+    eq_bh = (1.0 + ret).cumprod()
+    if len(eq_bh) and eq_bh.iloc[0] != 0:
+        eq_bh = eq_bh / eq_bh.iloc[0]
+
+    if strategy == "buy_hold":
+        eq_s = eq_bh.copy()
+        turns = 0
+    else:
+        fast = price.rolling(int(fast_ma), min_periods=int(fast_ma)).mean()
+        slow = price.rolling(int(slow_ma), min_periods=int(slow_ma)).mean()
+        pos = (fast.shift(1) > slow.shift(1)).astype(float).fillna(0.0)
+        strat_ret = pos * ret
+        eq_s = (1.0 + strat_ret).cumprod()
+        if len(eq_s) and eq_s.iloc[0] != 0:
+            eq_s = eq_s / eq_s.iloc[0]
+        turns = int(pos.diff().fillna(0.0).abs().sum())
+
+    return eq_s.reset_index(drop=True), eq_bh.reset_index(drop=True), turns
 
 logger = logging.getLogger(__name__)
 

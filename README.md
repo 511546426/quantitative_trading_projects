@@ -301,10 +301,10 @@ python3 strategy/examples/regime_switching_strategy.py
 
 **可观测与排障（与控制台页脚一致）**：每个 HTTP 响应带 `X-Request-ID`（可客户端传入同名请求头，否则服务端生成 UUID）与 `X-Server-Time`（UTC）；访问日志写入 logger `quant.ops.http`。`GET /api/health` 与 `GET /api/meta` 的 JSON 中含 `server_time_utc`；可选环境变量 `QUANT_OPS_BUILD_ID`（如 git SHA）会出现在 health/meta 与总览「构建标识」中。
 
-**单股 K 线与多因子回测**（Web 侧栏「单股研究」）：仅 v4.1 管线；依赖已回填的 ClickHouse `stock_daily` 与 PostgreSQL `stock_info`。主要接口（均需 `X-API-Key`，若已启用鉴权）：
+**多因子组合回测**（Web 侧栏「多因子组合回测」，路径 `/research`）：仅 v4.1 管线；依赖已回填的 ClickHouse `stock_daily` 与 PostgreSQL `stock_info`。主要接口（均需 `X-API-Key`，若已启用鉴权）：
 
 - `GET /api/research/stocks?q=`：按代码/名称模糊搜索；
-- `POST /api/research/regime-model-run`：请求体 `ts_code`、`start`、`end`，在服务端执行与 `strategy/examples/regime_switching_strategy.py` **同一套 v4.1** 因子、TOP_N、杠杆、成本与组合止损（全市场按年加载），返回组合净值、该标的买入持有净值、该标的日度权重及 K 线；**可能较慢且占内存**；（简易双均线单股回测已下线，请用 `POST /api/dashboard/quick-backtest`。）
+- `POST /api/research/regime-model-run`：请求体 `start`、`end`；`ts_code` **可选**（留空或省略则仅全市场组合：无 K 线，灰线为 CSI300 买入持有）；可选 `initial_capital`（正数，元）锚定净值。Ops 页默认不传 `initial_capital`。与 `strategy/examples/regime_switching_strategy.py` **同一套 v4.1**；**可能较慢且占内存**。运行期间 `multifactor_v4` 日志追加写入 **`logs/research_regime.log`**，Web「日志流」选 `research_regime.log（多因子回测）` 可实时查看。（简易双均线单股回测已下线，请用 `POST /api/dashboard/quick-backtest`。）
 - `GET /api/research/bars`：仅拉取 OHLCV。
 - **回测看板**：`POST /api/dashboard/quick-backtest` — 日线标的 + 双均线/买入持有，对比 `index_daily` 基准（默认 `000300.SH`），返回净值序列与 `strategy/backtest/metrics.py` 全量指标（含胜率、夏普等）。
 - **持仓与手工流水**：`GET/POST /api/portfolio/trades`、`DELETE /api/portfolio/trades/{id}`、`GET /api/portfolio/summary` — 首次访问时于 PostgreSQL 创建表 `manual_trade_ledger`；汇总按净持仓 × 最近收盘价估算市值，支持单标的占资金比例预警。

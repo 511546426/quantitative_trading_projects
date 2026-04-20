@@ -645,27 +645,56 @@ def weights_from_trading_panel(
     return weights
 
 
+def yearly_net_returns_from_series(
+    net_ret: pd.Series, *, min_days_per_year: int = 5
+) -> list[dict[str, Any]]:
+    """
+    按自然年聚合年收益率：对当年内各交易日 **净收益**（已含手续费/印花税、且与 Web 管线一致地含组合止损）
+    做 ``prod(1+r)-1``。与 ``main()`` 分年打印口径一致；不足 ``min_days_per_year`` 日的首尾年可省略。
+    """
+    if net_ret is None or len(net_ret) < 1:
+        return []
+    nr = net_ret.dropna()
+    rows: list[dict[str, Any]] = []
+    for y in sorted(set(nr.index.year)):
+        sub = nr.loc[nr.index.year == y]
+        if len(sub) < min_days_per_year:
+            continue
+        r = float((1.0 + sub).prod() - 1.0)
+        rows.append(
+            {
+                "year": int(y),
+                "net_return": round(r, 6),
+                "trading_days": int(len(sub)),
+            }
+        )
+    return rows
+
+
 # ═══════════════════════════════════════════════════════════
 # Web / API：同一套 v4.1 管线（可指定区间）
 # ═══════════════════════════════════════════════════════════
-def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str) -> dict[str, Any]:
+def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str | None) -> dict[str, Any]:
     """
-    与 ``main()`` 相同的因子、TOP_N、杠杆、成本与组合止损逻辑；
-    额外返回指定 ``ts_code`` 在组合中的日度权重及「该标的买入持有」基准净值，供前端与 K 线对照。
+    与 ``main()`` 相同的因子、TOP_N、杠杆、成本与组合止损逻辑。
+
+    * ``ts_code`` 非空：额外返回该标的 K 线对齐数据、在组合中的日度权重及该标的买入持有基准净值。
+    * ``ts_code`` 为 ``None`` 或空串：**仅全市场组合**净值序列；灰线为 CSI300 买入持有（归一）；无单票权重列（置 0）。
 
     Parameters
     ----------
     date_start, date_end
         YYYYMMDD，须在 ``START``/``END`` 与数据覆盖范围内。
     ts_code
-        如 ``601318.SH``；须存在于裁剪后的行情列中。
+        如 ``601318.SH``；留空则仅组合层回测。
 
     Raises
     ------
     ValueError
-        未知标的或数据不足以回测。
+        指定了未知标的或数据不足以回测。
     """
-    ts_code = ts_code.strip().upper()
+    ts_key = (ts_code or "").strip().upper()
+    pool_only = ts_key == ""
     cfg = Config.load("data/config/settings.yaml", "data/config/sources.yaml")
     ch, pg = connect_db(cfg)
     try:
@@ -698,8 +727,8 @@ def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str) -> di
         del active
         gc.collect()
 
-        if ts_code not in close.columns:
-            raise ValueError(f"标的 {ts_code} 不在模型可交易列（可能无行情或被池过滤）")
+        if not pool_only and ts_key not in close.columns:
+            raise ValueError(f"标的 {ts_key} 不在模型可交易列（可能无行情或被池过滤）")
 
         bull = regime_bull_exante(index_close, close.index) if index_close is not None else None
         signal = calc_signal(
@@ -742,11 +771,22 @@ def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str) -> di
                     out[k] = str(v)
             return out
 
-        wcol = weights[ts_code].reindex(net_ret.index).fillna(0.0)
         port_eq = (1 + net_ret).cumprod()
-        sc = close[ts_code].reindex(net_ret.index).ffill()
-        st_ret = sc.pct_change(fill_method=None).fillna(0.0)
-        bench_eq = (1 + st_ret).cumprod()
+        if pool_only:
+            wcol = pd.Series(0.0, index=net_ret.index)
+            if index_close is not None and len(index_close) > 0:
+                ic = index_close.reindex(net_ret.index).ffill()
+                irt = ic.pct_change(fill_method=None).fillna(0.0)
+                bench_eq = (1 + irt).cumprod()
+                if len(bench_eq) and float(bench_eq.iloc[0]) != 0:
+                    bench_eq = bench_eq / float(bench_eq.iloc[0])
+            else:
+                bench_eq = pd.Series(1.0, index=net_ret.index)
+        else:
+            wcol = weights[ts_key].reindex(net_ret.index).fillna(0.0)
+            sc = close[ts_key].reindex(net_ret.index).ffill()
+            st_ret = sc.pct_change(fill_method=None).fillna(0.0)
+            bench_eq = (1 + st_ret).cumprod()
 
         series: list[dict[str, Any]] = []
         for t in net_ret.index:
@@ -761,10 +801,13 @@ def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str) -> di
 
         return {
             "model": "regime_switching_v4.1",
-            "ts_code": ts_code,
+            "run_scope": "pool" if pool_only else "stock",
+            "ts_code": None if pool_only else ts_key,
+            "benchmark_label": "CSI300买入持有" if pool_only else "标的买入持有",
             "date_start": date_start,
             "date_end": date_end,
             "metrics_portfolio": _json_metrics(metrics),
+            "yearly_returns": yearly_net_returns_from_series(net_ret),
             "series": series,
         }
     finally:

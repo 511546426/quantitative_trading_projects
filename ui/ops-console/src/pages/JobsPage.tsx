@@ -1,7 +1,8 @@
 import { CalendarOutlined, ReloadOutlined, RocketOutlined } from "@ant-design/icons";
-import { App, Button, Card, Input, Space, Table, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Input, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import client from "../api/client";
 
 type JobRow = {
@@ -15,10 +16,13 @@ type JobRow = {
 
 export default function JobsPage() {
   const { message, modal } = App.useApp();
+  const navigate = useNavigate();
   const [rows, setRows] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [dailyDate, setDailyDate] = useState("");
   const [dailyBusy, setDailyBusy] = useState(false);
+  /** 为 True 时 API 在启动子进程前截断 scripts 下对应该任务的 .log，避免无限追加 */
+  const [resetLogBeforeBackfill, setResetLogBeforeBackfill] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -68,14 +72,19 @@ export default function JobsPage() {
   async function startBackfill(target: "daily-bars" | "index" | "valuation", label: string) {
     modal.confirm({
       title: `启动后台回填：${label}`,
-      content: "同一时间仅允许一个回填进程；任务在服务器侧持续运行。",
+      content:
+        "同一时间仅允许一个回填进程；任务在服务器侧持续运行。启动成功后将自动打开「日志流」并选中对应文件。是否清空日志见下方勾选。",
       okText: "启动",
       cancelText: "取消",
       onOk: async () => {
         try {
-          const { data } = await client.post("/api/ops/backfill", { target });
+          const { data } = await client.post<{ job_id: string; log_key: string }>("/api/ops/backfill", {
+            target,
+            reset_log: resetLogBeforeBackfill,
+          });
           message.success(`已启动 · job ${data.job_id}`);
           await refresh();
+          navigate(`/logs?log=${encodeURIComponent(data.log_key)}`);
         } catch (e: unknown) {
           const err = e as { response?: { data?: { detail?: string } } };
           message.error(err.response?.data?.detail ?? "启动失败");
@@ -95,6 +104,19 @@ export default function JobsPage() {
       width: 100,
       render: (a: boolean) =>
         a ? <Tag color="processing">运行中</Tag> : <Tag>已结束</Tag>,
+    },
+    {
+      title: "日志",
+      key: "lognav",
+      width: 88,
+      render: (_: unknown, r: JobRow) =>
+        r.log_key ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => navigate(`/logs?log=${r.log_key}`)}>
+            打开
+          </Button>
+        ) : (
+          "—"
+        ),
     },
   ];
 
@@ -128,6 +150,13 @@ export default function JobsPage() {
       </Card>
 
       <Card bordered={false}>
+        <Checkbox
+          checked={resetLogBeforeBackfill}
+          onChange={(e) => setResetLogBeforeBackfill(e.target.checked)}
+          style={{ display: "block", marginBottom: 12 }}
+        >
+          启动回填前清空对应日志文件（磁盘上截断为 0 再写入；不勾选则与历史输出<strong>追加</strong>在同一文件，文件会持续变大）
+        </Checkbox>
         <Space wrap style={{ marginBottom: 16 }}>
           <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>
             刷新列表

@@ -134,6 +134,10 @@ async def ops_sync(body: SyncOpRequest) -> dict[str, Any]:
 
 class BackfillRequest(BaseModel):
     target: Literal["daily-bars", "index", "valuation"]
+    reset_log: bool = Field(
+        False,
+        description="为 True 时在启动子进程前截断对应该任务的 scripts/*.log，避免与历史输出混写、单文件无限增大",
+    )
 
 
 _BACKFILL_MAP = {
@@ -146,7 +150,7 @@ _BACKFILL_MAP = {
 @app.post("/api/ops/backfill", dependencies=[Depends(require_api_key)])
 async def ops_backfill(body: BackfillRequest) -> dict[str, Any]:
     ops_cmd, log_key = _BACKFILL_MAP[body.target]
-    job_id, err = ops_runner.start_backfill(ops_cmd, log_key)
+    job_id, err = ops_runner.start_backfill(ops_cmd, log_key, reset_log=body.reset_log)
     if err:
         raise HTTPException(409, err)
     return {"job_id": job_id, "ops_cmd": ops_cmd, "log_key": log_key}

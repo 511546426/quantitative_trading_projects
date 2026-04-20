@@ -1,5 +1,6 @@
 import { LineChartOutlined } from "@ant-design/icons";
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -18,6 +19,7 @@ import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import { ColorType, LineSeries, createChart, type Time } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import client from "../api/client";
 
 type EquityPoint = {
@@ -143,6 +145,19 @@ export default function BacktestDashboardPage() {
         <Typography.Text code>index_daily</Typography.Text>（默认沪深300）。策略为简易双均线或买入持有；绩效指标由{" "}
         <Typography.Text code>strategy/backtest/metrics.py</Typography.Text> 计算（含胜率、夏普等）。
       </Typography.Paragraph>
+
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="全市场多因子组合 + 初始本金（整体回测）"
+        description={
+          <>
+            本页回测对象为<strong>单标的</strong>规则策略。要做与仓库 v4.1 一致的<strong>全市场多因子组合</strong>，可打开侧栏{" "}
+            <Link to="/research">多因子组合回测</Link>：勾选「仅全市场组合」可不选股票；或选对照票看 K 线与权重。可选「按初始本金展示净值」锚定金额。
+          </>
+        }
+      />
 
       <Card bordered={false} style={{ marginBottom: 16 }}>
         <Form

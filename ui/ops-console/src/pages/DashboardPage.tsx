@@ -99,7 +99,7 @@ export default function DashboardPage() {
             <span style={{ margin: "0 8px", color: "#555" }}>|</span>
             <Link to="/logs">日志流</Link>
             <span style={{ margin: "0 8px", color: "#555" }}>|</span>
-            <Link to="/research">单股研究</Link>
+            <Link to="/research">多因子组合回测</Link>
             <span style={{ margin: "0 8px", color: "#555" }}>|</span>
             <Link to="/backtest">回测看板</Link>
             <span style={{ margin: "0 8px", color: "#555" }}>|</span>

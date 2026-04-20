@@ -6,9 +6,9 @@ import os
 import subprocess
 import uuid
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 
-from ui.server.config import OPS_SH, PROJECT_DIR, TIMEOUT_SYNC
+from ui.server.config import LOG_PATHS, OPS_SH, PROJECT_DIR, TIMEOUT_SYNC
 
 
 def _pid_alive(pid: int) -> bool:
@@ -19,6 +19,26 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _truncate_known_log(log_key: str) -> str | None:
+    """清空已知回填/日更日志文件。成功返回 None，失败返回错误说明。"""
+    p = LOG_PATHS.get(log_key)
+    if p is None:
+        return "unknown log_key"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("", encoding="utf-8")
+    except OSError as e:
+        return str(e)
+    return None
+
+
+def _job_alive(j: dict[str, Any]) -> bool:
+    proc = cast(subprocess.Popen[Any] | None, j.get("_proc"))
+    if proc is not None:
+        return proc.poll() is None
+    return _pid_alive(int(j["pid"]))
 
 
 def run_sync(op: str, args: tuple[str, ...] = (), *, timeout: int = TIMEOUT_SYNC) -> tuple[int, str]:
@@ -48,8 +68,20 @@ _jobs: dict[str, dict[str, Any]] = {}
 
 
 def _prune_jobs_locked() -> None:
-    dead = [jid for jid, j in _jobs.items() if not _pid_alive(int(j["pid"]))]
-    for jid in dead:
+    """
+    移除已结束任务。必须对已结束的 ``Popen`` 调用 ``poll()``，否则子进程（bash）
+    会以僵尸态残留，``os.kill(pid, 0)`` 在 Linux 上仍视为「存活」，导致任务永远「运行中」。
+    """
+    to_drop: list[str] = []
+    for jid, j in list(_jobs.items()):
+        proc = cast(subprocess.Popen[Any] | None, j.get("_proc"))
+        if proc is not None:
+            if proc.poll() is not None:
+                to_drop.append(jid)
+            continue
+        if not _job_alive(j):
+            to_drop.append(jid)
+    for jid in to_drop:
         _jobs.pop(jid, None)
 
 
@@ -58,12 +90,12 @@ def active_backfill_job() -> dict[str, Any] | None:
     with _jobs_lock:
         _prune_jobs_locked()
         for j in _jobs.values():
-            if j.get("kind") == "backfill" and _pid_alive(int(j["pid"])):
-                return j
+            if j.get("kind") == "backfill" and _job_alive(j):
+                return {k: v for k, v in j.items() if k != "_proc"}
     return None
 
 
-def start_backfill(ops_cmd: str, log_key: str) -> tuple[str | None, str]:
+def start_backfill(ops_cmd: str, log_key: str, *, reset_log: bool = False) -> tuple[str | None, str]:
     """
     Start ``ops.sh <ops_cmd>`` in background (new session).
     Returns (job_id, error_message). error_message empty on success.
@@ -72,11 +104,12 @@ def start_backfill(ops_cmd: str, log_key: str) -> tuple[str | None, str]:
         return None, "invalid backfill command"
     with _jobs_lock:
         _prune_jobs_locked()
-        if any(
-            j.get("kind") == "backfill" and _pid_alive(int(j["pid"]))
-            for j in _jobs.values()
-        ):
+        if any(j.get("kind") == "backfill" and _job_alive(j) for j in _jobs.values()):
             return None, "已有回填任务在运行"
+    if reset_log:
+        terr = _truncate_known_log(log_key)
+        if terr:
+            return None, f"清空日志失败: {terr}"
     argv = ["/bin/bash", str(OPS_SH), ops_cmd]
     try:
         proc = subprocess.Popen(
@@ -97,6 +130,7 @@ def start_backfill(ops_cmd: str, log_key: str) -> tuple[str | None, str]:
             "ops_cmd": ops_cmd,
             "log_key": log_key,
             "pid": proc.pid,
+            "_proc": proc,
         }
     return job_id, ""
 
@@ -106,11 +140,6 @@ def list_jobs() -> list[dict[str, Any]]:
         _prune_jobs_locked()
         out = []
         for j in _jobs.values():
-            pid = int(j["pid"])
-            out.append(
-                {
-                    **j,
-                    "alive": _pid_alive(pid),
-                }
-            )
+            row = {k: v for k, v in j.items() if k != "_proc"}
+            out.append({**row, "alive": _job_alive(j)})
         return out

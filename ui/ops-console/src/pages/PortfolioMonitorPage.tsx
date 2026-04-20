@@ -15,6 +15,7 @@ import {
   message,
 } from "antd";
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import client from "../api/client";
 
 type TradeRow = {
@@ -138,6 +139,19 @@ export default function PortfolioMonitorPage() {
         ；下方按净股数 × 最近收盘价估算市值（非券商实时持仓）。汇总每 <Typography.Text code>8s</Typography.Text>{" "}
         自动刷新；单标的占资金比例超过阈值时标红预警。
       </Typography.Paragraph>
+
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="「总资金」不是策略回测初始金"
+        description={
+          <>
+            此处总资金仅用于<strong>手工持仓</strong>的市值占比与集中度估算。要做<strong>多因子全组合历史回测</strong>并指定初始本金（元），请使用{" "}
+            <Link to="/research">多因子组合回测</Link>，勾选「按初始本金展示净值」。
+          </>
+        }
+      />
 
       {summary?.warnings?.length ? (
         <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="风控提示" description={summary.warnings.join("；")} />

@@ -14,6 +14,7 @@ LOG_PATHS: dict[str, Path] = {
     "backfill-daily": SCRIPTS_DIR / "backfill_daily.log",
     "backfill-index": SCRIPTS_DIR / "backfill_index.log",
     "backfill-valuation": SCRIPTS_DIR / "backfill_valuation.log",
+    "research-regime": PROJECT_DIR / "logs" / "research_regime.log",
 }
 
 TIMEOUT_SYNC = int(os.environ.get("QUANT_OPS_SYNC_TIMEOUT", "120"))

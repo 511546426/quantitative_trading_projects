@@ -24,15 +24,28 @@ export type RegimeSeriesRow = {
   model_weight: number;
 };
 
-/** 单股研究页仅使用多因子 v4.1 管线结果 */
+/** 多因子组合回测页（/research）仅使用 v4.1 管线结果 */
+export type YearlyReturnRow = {
+  year: number;
+  net_return: number;
+  trading_days: number;
+};
+
 export type RegimeRun = {
   mode: "regime";
-  ts_code: string;
+  ts_code: string | null;
+  /** stock=带对照票；pool=仅全市场组合，灰线为 CSI300 买入持有 */
+  run_scope?: "pool" | "stock";
+  benchmark_label?: string;
   name: string;
   model: string;
   bars: BarRow[];
   series: RegimeSeriesRow[];
   metrics_portfolio: Record<string, number | string | null | undefined>;
+  /** 自然年 × 扣费后净日收益复利年收益 */
+  yearly_returns?: YearlyReturnRow[];
+  /** 若请求传入 initial_capital，服务端将净值锚定到该本金（元）并回显 */
+  initial_capital?: number;
 };
 
 export type ResearchRunSnapshot = {
@@ -70,7 +83,12 @@ function onPathResearch(): boolean {
   return window.location.pathname === "/research" || window.location.pathname.endsWith("/research");
 }
 
-export async function startRegimeRun(ts_code: string, start: string, end: string): Promise<void> {
+export async function startRegimeRun(
+  ts_code: string | null | undefined,
+  start: string,
+  end: string,
+  initial_capital?: number | null,
+): Promise<void> {
   if (snapshot.loading) {
     message.warning("已有回测任务在进行中，请稍候");
     return;
@@ -78,9 +96,17 @@ export async function startRegimeRun(ts_code: string, start: string, end: string
   snapshot = { loading: true, error: null, result: null };
   emit();
   try {
+    const body: Record<string, string | number> = { start, end };
+    const ts = ts_code?.trim();
+    if (ts) {
+      body.ts_code = ts.toUpperCase();
+    }
+    if (initial_capital != null && initial_capital > 0) {
+      body.initial_capital = initial_capital;
+    }
     const { data } = await client.post<Omit<RegimeRun, "mode">>(
       "/api/research/regime-model-run",
-      { ts_code, start, end },
+      body,
       { timeout: 600_000 },
     );
     snapshot = { loading: false, error: null, result: { ...data, mode: "regime" } };
@@ -89,7 +115,7 @@ export async function startRegimeRun(ts_code: string, start: string, end: string
       message.success("多因子管线回测完成（全市场加载，可能较慢）");
     } else {
       message.success({
-        content: "单股多因子回测已完成，请切回「单股研究」查看图表。",
+        content: "多因子组合回测已完成，请切回「多因子组合回测」查看图表。",
         duration: 8,
       });
     }

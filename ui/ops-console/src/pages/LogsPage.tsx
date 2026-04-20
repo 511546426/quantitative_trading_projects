@@ -1,9 +1,11 @@
 import { ClearOutlined } from "@ant-design/icons";
 import { Button, Card, Select, Space, Switch, Typography } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 const LOG_OPTIONS = [
   { value: "daily", label: "daily_update.log" },
+  { value: "research-regime", label: "research_regime.log（多因子回测）" },
   { value: "backfill-daily", label: "backfill_daily.log" },
   { value: "backfill-index", label: "backfill_index.log" },
   { value: "backfill-valuation", label: "backfill_valuation.log" },
@@ -12,11 +14,24 @@ const LOG_OPTIONS = [
 const MAX_CHARS = 480_000;
 
 export default function LogsPage() {
-  const [logKey, setLogKey] = useState("daily");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const validLogKeys = useMemo(() => new Set(LOG_OPTIONS.map((o) => o.value)), []);
+
+  const [logKey, setLogKey] = useState(() => {
+    const u = new URLSearchParams(window.location.search).get("log");
+    return u && validLogKeys.has(u) ? u : "daily";
+  });
   const [text, setText] = useState("");
   const [wsState, setWsState] = useState<"connecting" | "open" | "closed">("connecting");
   const [autoScroll, setAutoScroll] = useState(true);
   const preRef = useRef<HTMLPreElement>(null);
+
+  const logParam = searchParams.get("log");
+  useEffect(() => {
+    if (logParam && validLogKeys.has(logParam)) {
+      setLogKey((prev) => (prev === logParam ? prev : logParam));
+    }
+  }, [logParam, validLogKeys]);
 
   useEffect(() => {
     setText("");
@@ -70,7 +85,9 @@ export default function LogsPage() {
         日志流
       </Typography.Title>
       <Typography.Paragraph type="secondary">
-        WebSocket 订阅文件尾部：先推送快照，再增量追加。适合观察长任务与回填进度。
+        WebSocket 订阅文件尾部：先推送快照，再增量追加。磁盘上的日志默认<strong>持续追加</strong>（脚本多次运行会堆在同一文件里）；若从「任务与回填」启动并勾选
+        「启动前清空该日志」，服务端会先截断对应文件再跑本次任务。浏览器内仅保留约 {Math.round(MAX_CHARS / 1000)}k
+        字符以防卡顿，与文件大小无关。
       </Typography.Paragraph>
 
       <Card bordered={false}>
@@ -80,7 +97,10 @@ export default function LogsPage() {
             style={{ minWidth: 260 }}
             value={logKey}
             options={LOG_OPTIONS}
-            onChange={(v) => setLogKey(v)}
+            onChange={(v) => {
+              setLogKey(v);
+              setSearchParams({ log: v }, { replace: true });
+            }}
           />
           <Typography.Text type="secondary">
             WS:{" "}

@@ -31,7 +31,7 @@ const menu = [
   { key: "/infra", icon: <CloudServerOutlined />, label: "数据基建" },
   { key: "/jobs", icon: <DeploymentUnitOutlined />, label: "任务与回填" },
   { key: "/logs", icon: <FileTextOutlined />, label: "日志流" },
-  { key: "/research", icon: <LineChartOutlined />, label: "单股研究" },
+  { key: "/research", icon: <LineChartOutlined />, label: "多因子组合回测" },
   { key: "/backtest", icon: <BarChartOutlined />, label: "回测看板" },
   { key: "/portfolio", icon: <WalletOutlined />, label: "持仓与流水" },
 ];
