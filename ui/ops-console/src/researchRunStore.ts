@@ -17,21 +17,6 @@ export type BarRow = {
   adj_close: number;
 };
 
-export type EquityRow = { time: string; strategy_equity: number; benchmark_equity: number };
-
-export type SimpleRun = {
-  mode: "simple";
-  ts_code: string;
-  name: string;
-  strategy: string;
-  fast_ma: number;
-  slow_ma: number;
-  bars: BarRow[];
-  equity: EquityRow[];
-  metrics: Record<string, number>;
-  approx_position_changes: number;
-};
-
 export type RegimeSeriesRow = {
   time: string;
   portfolio_equity: number;
@@ -39,6 +24,7 @@ export type RegimeSeriesRow = {
   model_weight: number;
 };
 
+/** 单股研究页仅使用多因子 v4.1 管线结果 */
 export type RegimeRun = {
   mode: "regime";
   ts_code: string;
@@ -49,12 +35,10 @@ export type RegimeRun = {
   metrics_portfolio: Record<string, number | string | null | undefined>;
 };
 
-export type ResearchRunResult = SimpleRun | RegimeRun;
-
 export type ResearchRunSnapshot = {
   loading: boolean;
   error: string | null;
-  result: ResearchRunResult | null;
+  result: RegimeRun | null;
 };
 
 const listeners = new Set<() => void>();
@@ -107,44 +91,6 @@ export async function startRegimeRun(ts_code: string, start: string, end: string
       message.success({
         content: "单股多因子回测已完成，请切回「单股研究」查看图表。",
         duration: 8,
-      });
-    }
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } } };
-    const detail = err.response?.data?.detail ?? "请求失败";
-    snapshot = { loading: false, error: detail, result: null };
-    emit();
-    message.error(detail);
-  }
-}
-
-export async function startSimpleRun(payload: {
-  ts_code: string;
-  start: string;
-  end: string;
-  strategy: "buy_hold" | "ma_cross";
-  fast_ma: number;
-  slow_ma: number;
-}): Promise<void> {
-  if (snapshot.loading) {
-    message.warning("已有回测任务在进行中，请稍候");
-    return;
-  }
-  snapshot = { loading: true, error: null, result: null };
-  emit();
-  try {
-    const { data } = await client.post<Omit<SimpleRun, "mode">>(
-      "/api/research/single-stock-run",
-      payload,
-    );
-    snapshot = { loading: false, error: null, result: { ...data, mode: "simple" } };
-    emit();
-    if (onPathResearch()) {
-      message.success("回测完成");
-    } else {
-      message.success({
-        content: "简易回测已完成，请切回「单股研究」查看图表。",
-        duration: 6,
       });
     }
   } catch (e: unknown) {

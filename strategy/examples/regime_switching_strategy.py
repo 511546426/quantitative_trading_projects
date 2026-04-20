@@ -11,7 +11,9 @@ v4.1 策略层（目标：全样本年化显著高于无风险利率、牛市年
   - CSI300 趋势牛识别（无前瞻）: 昨收>昨MA60 且 昨MA20>昨MA60
   - 牛市：有效杠杆 × REGIME_LEV_MULT，组合止损阈值放宽为 STOP_LOSS_BULL
   - 牛市：因子权重向 MOM120 倾斜、压低 RET60/MA60（截面信号仍经 rank）
-  注：回测非承诺收益；10 万级本金请配合 regime_switching_lot_20k 看整手路径。
+  注：回测非承诺收益；小资金名义持仓宽度可参考 ``lot_effective_top_n()``（仍为理想小数权重、收盘价成交）。
+
+其它示例脚本索引见 ``strategy/examples/README.md``、总览见 ``strategy/README.md``。
 
 因子基准权重（合计=1.00）:
   MA60 0.20  RSI 0.07  RET60 0.05  PB 0.16  SIZE 0.08  EP 0.12  MOM120 0.32
@@ -387,7 +389,7 @@ def portfolio_stop_invested_start(
 ) -> pd.Series:
     """
     与 apply_portfolio_stop 同一状态机：第 i 日开盘时是否应持有风险仓位。
-    供 regime_switching_lot_20k 等整手回测对齐模型日历。
+    供外部回测对齐模型止损/空仓日历（与 ``apply_portfolio_stop`` 一致）。
     """
     if index_close is not None:
         ic = index_close.reindex(net_ret.index).ffill()
@@ -598,6 +600,49 @@ def calc_portfolio_return(
 
     net_ret = port_ret - cost
     return net_ret.dropna(), turnover
+
+
+def weights_from_trading_panel(
+    close: pd.DataFrame,
+    amount: pd.DataFrame,
+    exclude: set,
+    *,
+    index_close: pd.Series | None = None,
+    pb: pd.DataFrame | None = None,
+    pe_ttm: pd.DataFrame | None = None,
+    circ_mv: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """
+    在已对齐的行情面板上生成目标权重矩阵（含与 ``main()`` 一致的杠杆缩放）。
+
+    估值参数均可为 ``None``（仅价格类因子参与）；``index_close`` 为 ``None`` 时不做 CSI300 趋势牛加权。
+    供 ``execution/`` 等在无 Web 切片需求时复用，避免再维护一套并行策略脚本。
+    """
+    universe = build_universe(close, amount, exclude, circ_mv=circ_mv)
+    active = universe.any(axis=0)
+    if active.sum() < universe.shape[1]:
+        nb = universe.shape[1]
+        close = close.loc[:, active]
+        universe = universe.loc[:, active]
+        if pb is not None:
+            pb = pb.reindex(columns=close.columns)
+        if pe_ttm is not None:
+            pe_ttm = pe_ttm.reindex(columns=close.columns)
+        if circ_mv is not None:
+            circ_mv = circ_mv.reindex(columns=close.columns)
+        logger.info("weights_from_trading_panel 裁剪: %d → %d 只", nb, int(active.sum()))
+
+    bull = regime_bull_exante(index_close, close.index) if index_close is not None else None
+    signal = calc_signal(close, universe, pb=pb, pe_ttm=pe_ttm, circ_mv=circ_mv, regime_bull=bull)
+    weights = generate_weights(signal)
+
+    if float(LEVERAGE) != 1.0:
+        lev_ser = pd.Series(float(LEVERAGE), index=weights.index)
+        if index_close is not None:
+            bflt = regime_bull_exante(index_close, weights.index).astype(np.float64)
+            lev_ser = lev_ser * (1.0 + bflt * (float(REGIME_LEV_MULT) - 1.0))
+        weights = weights.multiply(lev_ser, axis=0)
+    return weights
 
 
 # ═══════════════════════════════════════════════════════════

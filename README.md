@@ -9,7 +9,7 @@
 | 路径 | 说明 |
 |------|------|
 | `data/` | 配置、Tushare 拉取、ClickHouse / PostgreSQL 写入与运维脚本 |
-| `strategy/` | 回测指标、可视化、示例策略（多因子 v4、反转价值等） |
+| `strategy/` | 回测指标、可视化、示例策略（多因子 v4、反转价值等）；**子目录与脚本职责见 [`strategy/README.md`](strategy/README.md)** |
 | `engine/` | C++17 交易引擎：Protobuf 信号、OMS、ZMQ 等（CMake + Conan） |
 | `execution/` | 实盘侧：风控、组合、QMT 适配、ZMQ 桥、运行入口 |
 | `docs/reports/` | 回测生成的图表（如 `multifactor_v4.png`） |
@@ -37,9 +37,10 @@ quantitative_trading_projects/
 │   ├── cleaners/                 # 清洗
 │   └── quality/                  # 质量检查
 │
-├── strategy/                     # 策略研究 / 回测
-│   ├── backtest/                 # metrics, visualizer
-│   ├── examples/                 # regime_switching_strategy, reversal_value_strategy, …
+├── strategy/                     # 策略研究 / 回测（README.md 说明库 vs examples）
+│   ├── README.md
+│   ├── backtest/                 # metrics, visualizer, vectorized, …
+│   ├── examples/                 # 可运行脚本；子目录 README 列变体关系
 │   ├── factors/
 │   ├── signals/
 │   └── analysis/
@@ -121,8 +122,7 @@ flowchart TB
                                       │ SQL 读取
 ┌─────────────────────────────────────▼─────────────────────────────────────┐
 │ 策略研究层 (Python)                                                         │
-│  示例: strategy/examples/regime_switching_strategy.py（多因子 v4 + 止损）    │
-│        strategy/examples/reversal_value_strategy.py                        │
+│  示例: strategy/examples/regime_switching_strategy.py（多因子 v4.1 + 止损）  │
 │  工具: strategy/backtest/metrics.py, visualizer.py                         │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                         回测净值 / 年度收益              Protobuf / ZMQ
@@ -253,14 +253,7 @@ python3 strategy/examples/regime_switching_strategy.py
 # 或: .venv/bin/python strategy/examples/regime_switching_strategy.py
 ```
 
-**整手真实回测（`regime_switching_lot_20k.py`）**  
-默认 **只输出** 指定本金下的 **100 股整手 + 最低佣 + 增量调仓** 账户权益曲线（与主脚本同信号、动态杠杆、模型止损日历）。小资金按 `lot_effective_top_n()` **自动收窄 TOP_N**（同一套截面信号下少持几只、避免一手都买不起的欠配）；主脚本理想回测仍为 **TOP_N=30**。`--show-model` 打印 **30 只** 小数权重模型百分比，便于对照。
-
-```bash
-python3 strategy/examples/regime_switching_lot_20k.py
-python3 strategy/examples/regime_switching_lot_20k.py --capital 100000
-python3 strategy/examples/regime_switching_lot_20k.py --show-model
-```
+小资金名义上可少持几只时，主脚本内 **`lot_effective_top_n()`** 可按本金与杠杆粗算等效 TOP_N（仍为理想小数权重、收盘价回测）。
 
 **输出**
 
@@ -308,11 +301,10 @@ python3 strategy/examples/regime_switching_lot_20k.py --show-model
 
 **可观测与排障（与控制台页脚一致）**：每个 HTTP 响应带 `X-Request-ID`（可客户端传入同名请求头，否则服务端生成 UUID）与 `X-Server-Time`（UTC）；访问日志写入 logger `quant.ops.http`。`GET /api/health` 与 `GET /api/meta` 的 JSON 中含 `server_time_utc`；可选环境变量 `QUANT_OPS_BUILD_ID`（如 git SHA）会出现在 health/meta 与总览「构建标识」中。
 
-**单股 K 线与简易回测**（Web 侧栏「单股研究」）：依赖已回填的 ClickHouse `stock_daily` 与 PostgreSQL `stock_info`。主要接口（均需 `X-API-Key`，若已启用鉴权）：
+**单股 K 线与多因子回测**（Web 侧栏「单股研究」）：仅 v4.1 管线；依赖已回填的 ClickHouse `stock_daily` 与 PostgreSQL `stock_info`。主要接口（均需 `X-API-Key`，若已启用鉴权）：
 
 - `GET /api/research/stocks?q=`：按代码/名称模糊搜索；
-- `POST /api/research/single-stock-run`：请求体含 `ts_code`、`start`/`end`（YYYYMMDD）、`strategy`（`ma_cross` | `buy_hold`）及均线参数，返回 K 线序列与净值曲线数据；
-- `POST /api/research/regime-model-run`：请求体 `ts_code`、`start`、`end`，在服务端执行与 `strategy/examples/regime_switching_strategy.py` **同一套 v4.1** 因子、TOP_N、杠杆、成本与组合止损（全市场按年加载），返回组合净值、该标的买入持有净值、该标的日度权重及 K 线；**可能较慢且占内存**；
+- `POST /api/research/regime-model-run`：请求体 `ts_code`、`start`、`end`，在服务端执行与 `strategy/examples/regime_switching_strategy.py` **同一套 v4.1** 因子、TOP_N、杠杆、成本与组合止损（全市场按年加载），返回组合净值、该标的买入持有净值、该标的日度权重及 K 线；**可能较慢且占内存**；（简易双均线单股回测已下线，请用 `POST /api/dashboard/quick-backtest`。）
 - `GET /api/research/bars`：仅拉取 OHLCV。
 - **回测看板**：`POST /api/dashboard/quick-backtest` — 日线标的 + 双均线/买入持有，对比 `index_daily` 基准（默认 `000300.SH`），返回净值序列与 `strategy/backtest/metrics.py` 全量指标（含胜率、夏普等）。
 - **持仓与手工流水**：`GET/POST /api/portfolio/trades`、`DELETE /api/portfolio/trades/{id}`、`GET /api/portfolio/summary` — 首次访问时于 PostgreSQL 创建表 `manual_trade_ledger`；汇总按净持仓 × 最近收盘价估算市值，支持单标的占资金比例预警。

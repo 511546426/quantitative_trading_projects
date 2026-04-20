@@ -9,7 +9,7 @@ signal_sender.py - Python 策略层向 C++ 引擎发送信号
 
     sender = SignalSender()
     sender.send_rebalance(
-        strategy_id="reversal_v1",
+        strategy_id="regime_v4.1",
         weights={"000001.SZ": 0.05, "600000.SH": 0.03},
         total_capital=20000.0,
     )
@@ -94,7 +94,7 @@ class SignalSender:
         Parameters
         ----------
         strategy_id : str
-            策略名称，如 "reversal_v1"
+            策略名称，如 "regime_v4.1"
         weights : dict
             symbol → 目标权重（0~1），所有 weight 之和 ≤ 1
         total_capital : float

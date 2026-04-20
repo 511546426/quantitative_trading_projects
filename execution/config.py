@@ -72,7 +72,7 @@ class TradingConfig:
 @dataclass
 class EngineConfig:
     initial_cash: float = 20_000.0
-    strategy_id: str = "reversal_v1"
+    strategy_id: str = "regime_v4.1"
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     algo: AlgoConfig = field(default_factory=AlgoConfig)

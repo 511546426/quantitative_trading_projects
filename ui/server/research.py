@@ -1,6 +1,7 @@
 """
-单股 K 线 + 简易回测 API（ClickHouse stock_daily + PostgreSQL stock_info）；
-并接入 ``regime_switching_strategy.run_regime_model_for_web`` 多因子 v4.1 全市场管线。
+单股 K 线 API（ClickHouse stock_daily + PostgreSQL stock_info）；
+多因子回测仅保留 ``regime_switching_strategy.run_regime_model_for_web`` v4.1 管线。
+双均线 + 指数对标见 ``/api/dashboard/quick-backtest``。
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import logging
 import re
 from datetime import datetime
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Any
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -185,154 +186,6 @@ def _bars_to_chart(df: pd.DataFrame) -> list[dict[str, Any]]:
             }
         )
     return out
-
-
-def _run_backtest_series(
-    df: pd.DataFrame,
-    strategy: Literal["buy_hold", "ma_cross"],
-    fast_ma: int,
-    slow_ma: int,
-) -> tuple[pd.Series, pd.Series, int]:
-    """返回 (策略净值, 基准净值, 近似换仓次数)；仓位用前一日收盘信号，无未来函数。"""
-    df = df.sort_values("trade_date").reset_index(drop=True)
-    c = df["adj_close"].astype(float)
-    ret = c.pct_change().fillna(0.0)
-
-    if strategy == "buy_hold":
-        pos = pd.Series(1.0, index=df.index)
-    else:
-        if fast_ma >= slow_ma or fast_ma < 2:
-            raise ResearchSyncError(400, "ma_cross 需要 fast_ma < slow_ma 且 fast_ma>=2")
-        ma_f = c.rolling(fast_ma, min_periods=fast_ma).mean()
-        ma_s = c.rolling(slow_ma, min_periods=slow_ma).mean()
-        raw = (ma_f > ma_s).astype(float)
-        pos = raw.shift(1).fillna(0.0)
-
-    strat_ret = pos * ret
-    eq_s = (1.0 + strat_ret).cumprod()
-    eq_b = (1.0 + ret).cumprod()
-    turns = int((pos.diff().abs() > 0).sum())
-    return eq_s, eq_b, turns
-
-
-def _equity_to_chart(df: pd.DataFrame, eq_s: pd.Series, eq_b: pd.Series) -> list[dict[str, Any]]:
-    out = []
-    for i in range(len(df)):
-        d = df.iloc[i]["trade_date"]
-        t = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
-        out.append(
-            {
-                "time": t,
-                "strategy_equity": float(eq_s.iloc[i]),
-                "benchmark_equity": float(eq_b.iloc[i]),
-            }
-        )
-    return out
-
-
-def _metrics(eq_s: pd.Series, eq_b: pd.Series, n_days: int) -> dict[str, float]:
-    tr_s = float(eq_s.iloc[-1] - 1.0) if len(eq_s) else 0.0
-    tr_b = float(eq_b.iloc[-1] - 1.0) if len(eq_b) else 0.0
-    years = max(n_days / 252.0, 1e-9)
-    ann_s = (1.0 + tr_s) ** (1.0 / years) - 1.0 if tr_s > -1 else -1.0
-    ann_b = (1.0 + tr_b) ** (1.0 / years) - 1.0 if tr_b > -1 else -1.0
-    dd_s = float((eq_s / eq_s.cummax() - 1.0).min()) if len(eq_s) else 0.0
-    dd_b = float((eq_b / eq_b.cummax() - 1.0).min()) if len(eq_b) else 0.0
-    return {
-        "total_return_strategy": round(tr_s, 6),
-        "total_return_benchmark": round(tr_b, 6),
-        "ann_return_strategy": round(ann_s, 6),
-        "ann_return_benchmark": round(ann_b, 6),
-        "max_drawdown_strategy": round(dd_s, 6),
-        "max_drawdown_benchmark": round(dd_b, 6),
-        "trading_days": float(n_days),
-    }
-
-
-class SingleStockRunRequest(BaseModel):
-    ts_code: str
-    start: str = Field(..., description="YYYYMMDD")
-    end: str = Field(..., description="YYYYMMDD")
-    strategy: Literal["buy_hold", "ma_cross"] = "ma_cross"
-    fast_ma: int = Field(5, ge=2, le=120)
-    slow_ma: int = Field(20, ge=3, le=250)
-
-
-def _single_stock_run_work(
-    ts: str,
-    s: str,
-    e: str,
-    strategy: Literal["buy_hold", "ma_cross"],
-    fast_ma: int,
-    slow_ma: int,
-) -> dict[str, Any]:
-    """CPU/IO-heavy path; runs in a worker thread under ``asyncio.shield``."""
-    try:
-        df = _fetch_ohlcv_df(ts, s, e)
-    except Exception as ex:
-        logger.exception("fetch ohlcv failed")
-        raise ResearchSyncError(503, f"ClickHouse 查询失败: {ex}") from ex
-
-    if df.empty:
-        raise ResearchSyncError(404, "该区间无行情或股票代码不存在")
-
-    eq_s, eq_b, turns = _run_backtest_series(df, strategy, fast_ma, slow_ma)
-    metrics = _metrics(eq_s, eq_b, len(df))
-
-    name = ""
-    try:
-        pg = _pg()
-        pg._ensure_conn()
-        cur = pg._conn.cursor()
-        try:
-            cur.execute("SELECT name FROM stock_info WHERE ts_code = %s", (ts,))
-            r = cur.fetchone()
-            if r:
-                name = r[0] or ""
-        finally:
-            cur.close()
-    except Exception:
-        pass
-
-    return {
-        "ts_code": ts,
-        "name": name,
-        "start": s,
-        "end": e,
-        "strategy": strategy,
-        "fast_ma": fast_ma,
-        "slow_ma": slow_ma,
-        "bars": _bars_to_chart(df),
-        "equity": _equity_to_chart(df, eq_s, eq_b),
-        "metrics": metrics,
-        "approx_position_changes": turns,
-        "as_of": datetime.utcnow().isoformat() + "Z",
-    }
-
-
-@router.post("/single-stock-run")
-async def single_stock_run(body: SingleStockRunRequest) -> dict[str, Any]:
-    """拉取 K 线并跑一次简易回测，返回画 K 线 + 净值曲线的数据。"""
-    ts = _validate_ts_code(body.ts_code)
-    s = _norm_ymd(body.start)
-    e = _norm_ymd(body.end)
-    if s > e:
-        raise HTTPException(400, "start 不能晚于 end")
-
-    try:
-        return await asyncio.shield(
-            asyncio.to_thread(
-                _single_stock_run_work,
-                ts,
-                s,
-                e,
-                body.strategy,
-                body.fast_ma,
-                body.slow_ma,
-            )
-        )
-    except ResearchSyncError as ex:
-        raise HTTPException(ex.status_code, ex.detail) from ex
 
 
 @router.get("/bars")

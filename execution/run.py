@@ -193,7 +193,7 @@ class DailyScheduler:
 
         zmq_cfg = self.cfg.get("zmq", {})
         bridge = StrategyBridge(
-            strategy_id=self.cfg.get("strategy_id", "reversal_v1"),
+            strategy_id=self.cfg.get("strategy_id", "regime_v4.1"),
             total_capital=self.cfg.get("initial_cash", 20_000.0),
             zmq_endpoint=zmq_cfg.get("signal", "ipc:///tmp/quant_signals"),
         )

@@ -27,7 +27,7 @@ class StrategyBridge:
 
     def __init__(
         self,
-        strategy_id: str = "reversal_v1",
+        strategy_id: str = "regime_v4.1",
         total_capital: float = 20_000.0,
         zmq_endpoint: str = "ipc:///tmp/quant_signals",
         ch_host: str = "localhost",
@@ -102,8 +102,9 @@ class StrategyBridge:
     def _compute_weights(self, trade_date: str) -> Optional[Dict[str, float]]:
         """调用策略计算目标权重"""
         try:
-            from strategy.examples.reversal_value_strategy import (
-                build_universe, calc_factors, generate_weights,
+            from strategy.examples.regime_switching_strategy import (
+                load_index_close,
+                weights_from_trading_panel,
             )
         except ImportError:
             logger.error("Cannot import strategy module")
@@ -114,9 +115,12 @@ class StrategyBridge:
             return None
 
         exclude = self._load_exclude_list()
-        universe = build_universe(close, amount, exclude)
-        signal = calc_factors(close, universe)
-        weights_df = generate_weights(signal)
+        ds = close.index[0].strftime("%Y%m%d")
+        de = close.index[-1].strftime("%Y%m%d")
+        index_close = load_index_close(self._ch, date_start=ds, date_end=de)
+        weights_df = weights_from_trading_panel(
+            close, amount, exclude, index_close=index_close
+        )
 
         if weights_df.empty:
             return None

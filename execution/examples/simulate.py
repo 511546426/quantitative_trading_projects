@@ -55,8 +55,9 @@ def run_simulation(start: str = "20250101", end: str = "20251231",
     from execution.broker.paper_broker import PaperBroker
     from execution.portfolio.position_manager import PositionManager
     from execution.runner import DailyRunner
-    from strategy.examples.reversal_value_strategy import (
-        build_universe, calc_factors, generate_weights,
+    from strategy.examples.regime_switching_strategy import (
+        load_index_close,
+        weights_from_trading_panel,
     )
 
     clean_sim_state()
@@ -75,9 +76,12 @@ def run_simulation(start: str = "20250101", end: str = "20251231",
     logger.info("预计算全期策略权重（仅需运行一次）...")
     close, amount = runner._load_strategy_data(end, lookback=400)
     exclude = runner._load_exclude_list()
-    universe  = build_universe(close, amount, exclude)
-    signal    = calc_factors(close, universe)
-    weights_df = generate_weights(signal)
+    ds = close.index[0].strftime("%Y%m%d")
+    de = close.index[-1].strftime("%Y%m%d")
+    index_close = load_index_close(runner._ch, date_start=ds, date_end=de)
+    weights_df = weights_from_trading_panel(
+        close, amount, exclude, index_close=index_close
+    )
     # 将 index 统一为 'YYYYMMDD' 字符串，方便按日期查找
     weights_df.index = weights_df.index.strftime("%Y%m%d")
     logger.info("权重矩阵: %d 交易日 × %d 只股票", *weights_df.shape)

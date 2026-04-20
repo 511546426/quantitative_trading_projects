@@ -131,12 +131,12 @@ class DailyRunner:
 
     def _get_target_weights(self, trade_date: str) -> Optional[Dict[str, float]]:
         """
-        调用反转策略，返回目标权重字典。
+        调用多因子 v4.1（``regime_switching_strategy``），返回目标权重字典。
         非调仓日（持仓无变化）返回 None。
         """
-        from strategy.examples.reversal_value_strategy import (
-            TOP_N, REBAL_FREQ, MIN_AMOUNT,
-            build_universe, calc_factors, generate_weights,
+        from strategy.examples.regime_switching_strategy import (
+            load_index_close,
+            weights_from_trading_panel,
         )
 
         logger.info("运行策略计算目标权重...")
@@ -148,12 +148,13 @@ class DailyRunner:
             logger.warning("close 数据为空，跳过")
             return None
 
-        # build_universe 需要 exclude 集合；Runner 中传入空集，依赖流动性/次新过滤
         exclude = self._load_exclude_list()
-        universe = build_universe(close, amount, exclude)
-        signal   = calc_factors(close, universe)
-
-        weights_df = generate_weights(signal)
+        ds = close.index[0].strftime("%Y%m%d")
+        de = close.index[-1].strftime("%Y%m%d")
+        index_close = load_index_close(self._ch, date_start=ds, date_end=de)
+        weights_df = weights_from_trading_panel(
+            close, amount, exclude, index_close=index_close
+        )
         last_weights = weights_df.iloc[-1]
         last_weights = last_weights[last_weights > 0]
 
