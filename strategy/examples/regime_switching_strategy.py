@@ -80,7 +80,27 @@ STOP_COOLDOWN  = 63         # 最长清仓等待天数
 BUY_COST_BPS  = 7.5
 SELL_COST_BPS = 17.5
 
+# A 股整手现金回测（Web 传入 initial_capital 时启用）
+A_SHARE_LOT = 100
+# 卖出所得 **下一交易日开盘入账**（与当日买入隔离）；买入用昨收判断涨停、卖用跌停
+CASH_SLIP_BUY_BPS = 2.0
+CASH_SLIP_SELL_BPS = 2.0
+# 主板近似：涨停附近不买、跌停附近不卖（ST 5% 未区分）
+CASH_LIMIT_UP_FRAC = 0.095
+CASH_LIMIT_DOWN_FRAC = -0.095
+
 BENCHMARK = "000300.SH"
+
+TRADING_DAYS_PER_YEAR = 252
+
+
+def _max_drawdown_in_sample(net_ret: pd.Series) -> float:
+    """样本内最大回撤（与 ``main()`` 分年 ``_dd`` 一致）。"""
+    nr = net_ret.dropna()
+    if len(nr) < 2:
+        return 0.0
+    nav = (1 + nr).cumprod()
+    return float((nav / nav.cummax() - 1).min())
 
 
 def lot_effective_top_n(
@@ -602,6 +622,253 @@ def calc_portfolio_return(
     return net_ret.dropna(), turnover
 
 
+def _pick_top_for_rebalance(
+    signal: pd.DataFrame,
+    dt: pd.Timestamp,
+    prev_held: set[str],
+    *,
+    top_n: int,
+    inertia: float,
+) -> tuple[list[str], set[str]] | None:
+    """与 ``generate_weights`` 调仓日选股逻辑一致（惯性加分）。"""
+    if dt not in signal.index:
+        return None
+    s = signal.loc[dt].dropna().copy()
+    if len(s) < top_n:
+        return None
+    for c in prev_held:
+        if c in s.index:
+            s[c] += inertia
+    top = s.nlargest(top_n)
+    return list(top.index), set(top.index)
+
+
+def _mtm_positions_cash(pos: dict[str, int], price_row: pd.Series) -> float:
+    v = 0.0
+    for c, sh in pos.items():
+        if sh <= 0:
+            continue
+        px = float(price_row.get(c, np.nan))
+        if np.isfinite(px) and px > 0:
+            v += float(sh) * px
+    return v
+
+
+def _round_robin_buy_lots(
+    cash_budget: float,
+    symbols: list[str],
+    price_row: pd.Series,
+    *,
+    lot: int = A_SHARE_LOT,
+    prev_row: pd.Series | None = None,
+    slip_buy_bps: float = 0.0,
+    limit_up_frac: float = 10.0,
+) -> tuple[dict[str, int], float, float]:
+    """
+    在 ``cash_budget`` 内对 ``symbols`` 轮询每次各加一手，直至现金不足以再买任一票的一手（含买侧费用）。
+    ``slip_buy_bps``：买价上浮（滑点）；``limit_up_frac<2`` 时若相对昨收涨幅≥该值则跳过该标的（近似涨停不可买）。
+    返回 (持仓股数, 买入总名义本金按昨收口径, 实际花费现金含费与滑点)。
+    """
+    prices: dict[str, float] = {}
+    for s in symbols:
+        if s not in price_row.index:
+            continue
+        p = float(price_row[s])
+        if not (np.isfinite(p) and p > 0):
+            continue
+        if prev_row is not None and limit_up_frac < 2.0 and s in prev_row.index:
+            p0 = float(prev_row[s])
+            if np.isfinite(p0) and p0 > 0 and (p / p0 - 1.0) >= limit_up_frac:
+                continue
+        prices[s] = p
+    if not prices or cash_budget <= 0:
+        return {}, 0.0, 0.0
+    syms = sorted(prices.keys())
+    pos: dict[str, int] = {s: 0 for s in syms}
+    rem = float(cash_budget)
+    buy_gross = 0.0
+    slipf = 1.0 + float(slip_buy_bps) / 1e4
+    while rem > 0:
+        progressed = False
+        for s in syms:
+            p = prices[s]
+            exec_px = p * slipf
+            gross = lot * exec_px
+            fee = gross * BUY_COST_BPS / 1e4
+            need = gross + fee
+            if rem + 1e-9 >= need:
+                pos[s] += lot
+                rem -= need
+                buy_gross += lot * p
+                progressed = True
+        if not progressed:
+            break
+    out = {s: q for s, q in pos.items() if q > 0}
+    spent_total = cash_budget - rem
+    return out, buy_gross, spent_total
+
+
+def _liquidate_all_limits(
+    pos: dict[str, int],
+    price_row: pd.Series,
+    prev_row: pd.Series | None,
+    *,
+    slip_sell_bps: float,
+    limit_down_frac: float,
+) -> tuple[float, float, dict[str, int]]:
+    """
+    尽量卖出全部持仓；跌停（相对昨收跌幅≤limit_down）时该股顺延至后续交易日再卖。
+    返回 (卖出名义本金合计, 入 **T+1 待交割** 的现金净额, 剩余持仓)。
+    """
+    slipf = 1.0 - float(slip_sell_bps) / 1e4
+    new_pos = dict(pos)
+    sell_gross = 0.0
+    net_to_pending = 0.0
+    for c in list(new_pos.keys()):
+        sh = int(new_pos.get(c, 0))
+        if sh <= 0:
+            continue
+        px = float(price_row.get(c, np.nan))
+        if not (np.isfinite(px) and px > 0):
+            continue
+        if prev_row is not None and limit_down_frac > -2.0 and c in prev_row.index:
+            p0 = float(prev_row[c])
+            if np.isfinite(p0) and p0 > 0:
+                ret = px / p0 - 1.0
+                if ret <= limit_down_frac:
+                    continue
+        exec_px = px * slipf
+        gross_exec = float(sh) * exec_px
+        fee = gross_exec * SELL_COST_BPS / 1e4
+        net_to_pending += gross_exec - fee
+        sell_gross += float(sh) * px
+        del new_pos[c]
+    return sell_gross, net_to_pending, new_pos
+
+
+def simulate_cash_account_backtest(
+    close: pd.DataFrame,
+    signal: pd.DataFrame,
+    initial_cash: float,
+    *,
+    top_n: int = TOP_N,
+    rebal_freq: int = REBAL_FREQ,
+    inertia: float = INERTIA,
+) -> tuple[pd.Series, pd.Series, pd.DataFrame]:
+    """
+    现金账户、多头整手、**无融资**；较基础版增加：
+
+    * **T+1 交割**：卖出净额记入 ``pending_settlement``，**下一交易日**才并入现金；买入仅在现金到账后执行。
+    * **调仓拆日**：调仓日仅 **卖出 + 选股**；实际 **买入** 推迟到 **下一交易日** 收盘（用当日收盘价与涨停过滤）。
+    * **涨跌停（简化）**：相对昨收涨幅 ≥ ``CASH_LIMIT_UP_FRAC`` 不买；跌幅 ≤ ``CASH_LIMIT_DOWN_FRAC`` 不卖（持仓顺延）。
+    * **滑点**：买价 ``+CASH_SLIP_BUY_BPS``、卖价 ``-CASH_SLIP_SELL_BPS``（在佣金之外）。
+    * 停牌/无行情：当日该票 **无法交易**（与面板缺价一致）。
+
+    未模拟：分红送转、配股、T+0 回转、集合竞价、逐笔队列。**忽略**纸面 ``LEVERAGE``。
+    """
+    dates = close.index
+    cash = float(initial_cash)
+    pending_settlement = 0.0
+    pos: dict[str, int] = {}
+    prev_held: set[str] = set()
+    deferred_syms: list[str] | None = None
+
+    equity_vals: list[float] = []
+    turn_vals: list[float] = []
+    w_rows: list[pd.Series] = []
+
+    def _equity_now(r: pd.Series, pend: float) -> float:
+        return float(cash + _mtm_positions_cash(pos, r) + pend)
+
+    for i, dt in enumerate(dates):
+        row = close.loc[dt]
+        prev_row = close.iloc[i - 1] if i > 0 else None
+
+        cash += float(pending_settlement)
+        pending_settlement = 0.0
+
+        turn_t = 0.0
+
+        # —— 上一调仓日决定的买入：本日收盘先执行（已含昨夜卖出交割款），再处理本日是否再调仓 ——
+        if deferred_syms is not None:
+            syms = deferred_syms
+            deferred_syms = None
+            eq_before_buy = _equity_now(row, pending_settlement)
+            new_pos, bg, spent = _round_robin_buy_lots(
+                cash,
+                syms,
+                row,
+                prev_row=prev_row,
+                slip_buy_bps=CASH_SLIP_BUY_BPS,
+                limit_up_frac=CASH_LIMIT_UP_FRAC,
+            )
+            cash -= spent
+            for s, q in new_pos.items():
+                if q <= 0:
+                    continue
+                pos[s] = int(pos.get(s, 0)) + int(q)
+            if eq_before_buy > 1e-9 and bg > 0:
+                turn_t += bg / eq_before_buy
+
+        is_rebal = i % rebal_freq == 0
+        if is_rebal:
+            eq_before_sell = _equity_now(row, pending_settlement)
+            sg, net_pend, pos = _liquidate_all_limits(
+                pos,
+                row,
+                prev_row,
+                slip_sell_bps=CASH_SLIP_SELL_BPS,
+                limit_down_frac=CASH_LIMIT_DOWN_FRAC,
+            )
+            pending_settlement += net_pend
+            if eq_before_sell > 1e-9 and sg > 0:
+                turn_t += sg / eq_before_sell
+
+            picked = _pick_top_for_rebalance(
+                signal, dt, prev_held, top_n=top_n, inertia=inertia
+            )
+            if picked is not None:
+                syms, prev_held = picked
+                deferred_syms = list(syms)
+            else:
+                prev_held = set()
+                deferred_syms = None
+
+        turn_vals.append(turn_t)
+
+        equity = _equity_now(row, pending_settlement)
+        equity_vals.append(equity)
+
+        if equity > 1e-12:
+            wser = pd.Series(0.0, index=close.columns, dtype=np.float64)
+            for c, sh in pos.items():
+                if c in wser.index and sh > 0:
+                    px = float(row.get(c, np.nan))
+                    if np.isfinite(px) and px > 0:
+                        wser.loc[c] = float(sh) * px / equity
+            w_rows.append(wser)
+        else:
+            w_rows.append(pd.Series(0.0, index=close.columns, dtype=np.float64))
+
+    equity_s = pd.Series(equity_vals, index=dates, dtype=np.float64)
+    raw_ret = equity_s.pct_change(fill_method=None)
+    raw_ret = raw_ret.fillna(0.0)
+    raw_ret.iloc[0] = 0.0
+
+    turnover = pd.Series(turn_vals, index=dates, dtype=np.float64)
+    weights_mv = pd.DataFrame(w_rows, index=dates, columns=close.columns).fillna(0.0)
+    logger.info(
+        "现金整手(增强): 初始=%.0f 末权益=%.0f 调仓=%d日 T+1交割+次日买入 涨跌停±%.0f%% 滑点买%.1f/卖%.1fbps",
+        float(initial_cash),
+        float(equity_s.iloc[-1]) if len(equity_s) else 0.0,
+        int(rebal_freq),
+        CASH_LIMIT_UP_FRAC * 100,
+        CASH_SLIP_BUY_BPS,
+        CASH_SLIP_SELL_BPS,
+    )
+    return raw_ret, turnover, weights_mv
+
+
 def weights_from_trading_panel(
     close: pd.DataFrame,
     amount: pd.DataFrame,
@@ -645,12 +912,16 @@ def weights_from_trading_panel(
     return weights
 
 
-def yearly_net_returns_from_series(
-    net_ret: pd.Series, *, min_days_per_year: int = 5
+def yearly_returns_table(
+    net_ret: pd.Series,
+    turnover: pd.Series | None = None,
+    *,
+    min_days_per_year: int = 5,
 ) -> list[dict[str, Any]]:
     """
-    按自然年聚合年收益率：对当年内各交易日 **净收益**（已含手续费/印花税、且与 Web 管线一致地含组合止损）
-    做 ``prod(1+r)-1``。与 ``main()`` 分年打印口径一致；不足 ``min_days_per_year`` 日的首尾年可省略。
+    按自然年聚合：年净收益、年内最大回撤、年化换手（当年日度换手均值×252，与 ``calc_full_metrics`` 全样本定义一致）。
+
+    净收益为当年 ``prod(1+r)-1``，与 ``main()`` 分年口径一致；``turnover`` 为权重变化绝对和（不含止损调仓，与全页「年化换手」一致）。
     """
     if net_ret is None or len(net_ret) < 1:
         return []
@@ -661,11 +932,18 @@ def yearly_net_returns_from_series(
         if len(sub) < min_days_per_year:
             continue
         r = float((1.0 + sub).prod() - 1.0)
+        mdd = _max_drawdown_in_sample(sub)
+        ann_turn: float | None = None
+        if turnover is not None and len(sub) > 0:
+            tsub = turnover.reindex(sub.index).astype(np.float64).fillna(0.0)
+            ann_turn = float(tsub.mean() * TRADING_DAYS_PER_YEAR)
         rows.append(
             {
                 "year": int(y),
                 "net_return": round(r, 6),
                 "trading_days": int(len(sub)),
+                "max_drawdown": round(mdd, 6),
+                "annualized_turnover": round(ann_turn, 6) if ann_turn is not None else None,
             }
         )
     return rows
@@ -674,9 +952,18 @@ def yearly_net_returns_from_series(
 # ═══════════════════════════════════════════════════════════
 # Web / API：同一套 v4.1 管线（可指定区间）
 # ═══════════════════════════════════════════════════════════
-def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str | None) -> dict[str, Any]:
+def run_regime_model_for_web(
+    date_start: str,
+    date_end: str,
+    ts_code: str | None,
+    initial_capital: float | None = None,
+) -> dict[str, Any]:
     """
-    与 ``main()`` 相同的因子、TOP_N、杠杆、成本与组合止损逻辑。
+    与 ``main()`` 相同的因子、TOP_N、成本与组合止损逻辑。
+
+    * ``initial_capital`` 为正时：启用 **A 股现金整手** 账户回测（100 股、无融资、**T+1 卖出交割**、**建仓顺延下一交易日**、
+      简化涨跌停与滑点；详见 ``simulate_cash_account_backtest``）；**不再使用**纸面 ``LEVERAGE``；绩效与净值均基于该路径。
+    * 未传或 ≤0：沿用 **理想小数权重 + 杠杆** 与 ``calc_portfolio_return`` 一致的原回测。
 
     * ``ts_code`` 非空：额外返回该标的 K 线对齐数据、在组合中的日度权重及该标的买入持有基准净值。
     * ``ts_code`` 为 ``None`` 或空串：**仅全市场组合**净值序列；灰线为 CSI300 买入持有（归一）；无单票权重列（置 0）。
@@ -687,6 +974,8 @@ def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str | None
         YYYYMMDD，须在 ``START``/``END`` 与数据覆盖范围内。
     ts_code
         如 ``601318.SH``；留空则仅组合层回测。
+    initial_capital
+        可选。正数时现金整手模式下的起始资金（元）。
 
     Raises
     ------
@@ -737,18 +1026,31 @@ def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str | None
         del pb, pe_ttm, circ_mv, universe
         gc.collect()
 
-        weights = generate_weights(signal)
+        ic_use = float(initial_capital) if initial_capital is not None and float(initial_capital) > 0 else 0.0
+        use_cash_lots = ic_use > 0
+
+        if use_cash_lots:
+            net_ret, turnover, weights = simulate_cash_account_backtest(
+                close,
+                signal,
+                ic_use,
+                top_n=TOP_N,
+                rebal_freq=REBAL_FREQ,
+                inertia=INERTIA,
+            )
+        else:
+            weights = generate_weights(signal)
+            if float(LEVERAGE) != 1.0:
+                lev_ser = pd.Series(float(LEVERAGE), index=weights.index)
+                if index_close is not None:
+                    bflt = regime_bull_exante(index_close, weights.index).astype(np.float64)
+                    lev_ser = lev_ser * (1.0 + bflt * (float(REGIME_LEV_MULT) - 1.0))
+                weights = weights.multiply(lev_ser, axis=0)
+            net_ret, turnover = calc_portfolio_return(weights, close)
+
         del signal
         gc.collect()
 
-        if float(LEVERAGE) != 1.0:
-            lev_ser = pd.Series(float(LEVERAGE), index=weights.index)
-            if index_close is not None:
-                bflt = regime_bull_exante(index_close, weights.index).astype(np.float64)
-                lev_ser = lev_ser * (1.0 + bflt * (float(REGIME_LEV_MULT) - 1.0))
-            weights = weights.multiply(lev_ser, axis=0)
-
-        net_ret, turnover = calc_portfolio_return(weights, close)
         net_ret = apply_portfolio_stop(net_ret, index_close=index_close)
         metrics = calc_full_metrics(net_ret, turnover)
 
@@ -806,8 +1108,11 @@ def run_regime_model_for_web(date_start: str, date_end: str, ts_code: str | None
             "benchmark_label": "CSI300买入持有" if pool_only else "标的买入持有",
             "date_start": date_start,
             "date_end": date_end,
+            "backtest_mode": "cash_lots" if use_cash_lots else "fractional",
             "metrics_portfolio": _json_metrics(metrics),
-            "yearly_returns": yearly_net_returns_from_series(net_ret),
+            "yearly_returns": yearly_returns_table(
+                net_ret, turnover.reindex(net_ret.index).fillna(0.0)
+            ),
             "series": series,
         }
     finally:
@@ -907,24 +1212,18 @@ def main():
     print("=" * 60)
     print(format_report(metrics))
 
-    def _yr(nr: pd.Series) -> dict[int, float]:
-        return {
-            int(y): float((1 + nr[nr.index.year == y]).prod() - 1)
-            for y in sorted(set(nr.index.year))
-            if len(nr[nr.index.year == y]) >= 5
-        }
+    yrows = yearly_returns_table(net_ret, turnover, min_days_per_year=5)
+    yearly = {int(r["year"]): float(r["net_return"]) for r in yrows}
 
-    def _dd(nr: pd.Series) -> float:
-        nav = (1 + nr).cumprod()
-        return float((nav / nav.cummax() - 1).min())
-
-    print(f"\n  {'年份':>4}  {'年度收益':>10}  {'年内回撤':>10}")
-    print("  " + "-" * 34)
-    yearly = _yr(net_ret)
-    for yr, yr_ret in yearly.items():
-        r_ = net_ret[net_ret.index.year == yr]
-        dd = _dd(r_)
-        print(f"  {yr}   {yr_ret:>+10.1%}  {dd:>10.1%}")
+    print(f"\n  {'年份':>4}  {'年度收益':>10}  {'年内回撤':>10}  {'年化换手':>10}")
+    print("  " + "-" * 48)
+    for r in yrows:
+        yr = int(r["year"])
+        at = r.get("annualized_turnover")
+        at_s = f"{float(at):>10.0%}" if at is not None else f"{'—':>10}"
+        print(
+            f"  {yr}   {float(r['net_return']):>+10.1%}  {float(r['max_drawdown']):>10.1%}  {at_s}"
+        )
 
     total = float((1 + net_ret).prod() - 1)
     yr0 = min(yearly.keys()) if yearly else int(START[:4])

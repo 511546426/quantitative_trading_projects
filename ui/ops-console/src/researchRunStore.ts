@@ -29,6 +29,10 @@ export type YearlyReturnRow = {
   year: number;
   net_return: number;
   trading_days: number;
+  /** 年内净值最大回撤（负值），与脚本分年「年内回撤」一致 */
+  max_drawdown?: number | null;
+  /** 当年日度换手均值×252，与全样本「年化换手」定义一致 */
+  annualized_turnover?: number | null;
 };
 
 export type RegimeRun = {
@@ -36,6 +40,8 @@ export type RegimeRun = {
   ts_code: string | null;
   /** stock=带对照票；pool=仅全市场组合，灰线为 CSI300 买入持有 */
   run_scope?: "pool" | "stock";
+  /** 传入 initial_capital 时为 cash_lots（整手现金），否则为 fractional（理想权重+杠杆） */
+  backtest_mode?: "cash_lots" | "fractional";
   benchmark_label?: string;
   name: string;
   model: string;

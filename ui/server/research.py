@@ -247,7 +247,11 @@ class RegimeModelRunRequest(BaseModel):
     end: str = Field(..., description="YYYYMMDD")
     initial_capital: float | None = Field(
         None,
-        description="可选。若给出正数，则将返回的 portfolio/stock 净值序列锚定为区间首日该本金（元）；绩效指标仍为收益率口径不变。",
+        description=(
+            "可选。若给出正数：启用 **A 股现金整手** 账户回测（100 股、无融资、调仓先卖后买），"
+            "绩效与净值均基于该路径；返回的净值序列仍锚定为区间首日该本金（元）以便与基准对比。"
+            "不传或为 null：理想小数权重+杠杆回测（原行为）。"
+        ),
         ge=1_000,
         le=1e12,
     )
@@ -263,7 +267,10 @@ class RegimeModelRunRequest(BaseModel):
 
 
 def _run_regime_model_for_web_with_file_log(
-    date_start: str, date_end: str, ts_code: str | None
+    date_start: str,
+    date_end: str,
+    ts_code: str | None,
+    initial_capital: float | None = None,
 ) -> dict[str, Any]:
     """
     在线程内执行 v4.1，并把 ``multifactor_v4`` 日志追加写入 ``logs/research_regime.log``，
@@ -286,7 +293,9 @@ def _run_regime_model_for_web_with_file_log(
             date_start,
             date_end,
         )
-        out = run_regime_model_for_web(date_start, date_end, ts_code)
+        out = run_regime_model_for_web(
+            date_start, date_end, ts_code, initial_capital=initial_capital
+        )
         strat_log.info("======== regime-model-run end (ok) ========")
         return out
     except Exception:
@@ -310,9 +319,18 @@ async def regime_model_run(body: RegimeModelRunRequest) -> dict[str, Any]:
     e = _norm_ymd(body.end)
     if s > e:
         raise HTTPException(400, "start 不能晚于 end")
+    cap = body.initial_capital
     # Shield: client disconnect / navigation must not cancel the worker thread mid-run.
     try:
-        out = await asyncio.shield(asyncio.to_thread(_run_regime_model_for_web_with_file_log, s, e, ts_norm))
+        out = await asyncio.shield(
+            asyncio.to_thread(
+                _run_regime_model_for_web_with_file_log,
+                s,
+                e,
+                ts_norm,
+                float(cap) if cap is not None and cap > 0 else None,
+            )
+        )
     except ValueError as ex:
         raise HTTPException(400, str(ex)) from ex
     except Exception as ex:
@@ -336,7 +354,6 @@ async def regime_model_run(body: RegimeModelRunRequest) -> dict[str, Any]:
             pass
 
     out["name"] = name
-    cap = body.initial_capital
     if cap is not None and cap > 0 and out.get("series"):
         out["series"] = _rebase_equity_series_to_capital(out["series"], float(cap))
         out["initial_capital"] = float(cap)

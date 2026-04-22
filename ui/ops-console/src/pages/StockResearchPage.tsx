@@ -310,9 +310,14 @@ export default function StockResearchPage() {
               onChange={(e) => setAnchorCapitalEnabled(e.target.checked)}
               style={{ display: "block", marginBottom: 4 }}
             >
-              按初始本金展示净值（元）
+              整手现金账户回测（元）
             </Checkbox>
-            <Typography.Text type="secondary">初始本金（元）</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              勾选并填写后：按 A 股 100 股一手、无融资、调仓日先卖后买；绩效与净值均基于该账户（非理想杠杆权重）。
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+              初始本金（元）
+            </Typography.Text>
             <div style={{ marginTop: 6 }}>
               <InputNumber
                 style={{ width: "100%" }}
@@ -343,6 +348,15 @@ export default function StockResearchPage() {
 
       {result && (
         <>
+          {result.backtest_mode === "cash_lots" ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="当前为整手现金账户回测（增强约束）"
+              description="已模拟：T+1 卖出款次日入账、调仓买入顺延至下一交易日、±9.5% 近似涨跌停（不买涨停、跌停不卖顺延）、买卖滑点各 2bp；停牌/无价不成交。未模拟：分红送转、配股、集合竞价与逐笔队列。"
+            />
+          ) : null}
           <Descriptions bordered size="small" column={{ xs: 1, sm: 2, md: 3 }} style={{ marginBottom: 16 }}>
             <Descriptions.Item label="模式">
               {result.run_scope === "pool" || !result.ts_code ? "全市场组合" : "组合 + 对照票"}
@@ -350,6 +364,9 @@ export default function StockResearchPage() {
             <Descriptions.Item label="证券">{result.ts_code ?? "—（未选）"}</Descriptions.Item>
             <Descriptions.Item label="名称">{result.name || "—"}</Descriptions.Item>
             <Descriptions.Item label="模型">{result.model}</Descriptions.Item>
+            <Descriptions.Item label="回测口径">
+              {result.backtest_mode === "cash_lots" ? "整手现金账户" : "理想权重+杠杆"}
+            </Descriptions.Item>
             {result.initial_capital != null && result.initial_capital > 0 && (
               <>
                 <Descriptions.Item label="初始本金（锚定）">
@@ -388,7 +405,7 @@ export default function StockResearchPage() {
               style={{ marginBottom: 16 }}
             >
               <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-                各自然年内对日度<strong>净收益</strong>连乘得到年总回报，与命令行脚本分年口径一致；不含额外「再扣一遍成本」。
+                各自然年内对日度<strong>净收益</strong>连乘得到年总回报；<strong>最大回撤</strong>为当年净值曲线内样本最大回撤；<strong>年化换手</strong>为当年日度换手（权重变化绝对和）均值×252，与上方「年化换手」全样本定义一致；均基于扣费净收益与权重，组合止损只作用于收益序列。
               </Typography.Paragraph>
               <Table<YearlyReturnRow>
                 size="small"
@@ -400,6 +417,19 @@ export default function StockResearchPage() {
                     title: "年收益率",
                     dataIndex: "net_return",
                     render: (v: number) => pct(v),
+                  },
+                  {
+                    title: "最大回撤",
+                    dataIndex: "max_drawdown",
+                    width: 110,
+                    render: (v: number | null | undefined) => pct(v),
+                  },
+                  {
+                    title: "年化换手",
+                    dataIndex: "annualized_turnover",
+                    width: 110,
+                    render: (v: number | null | undefined) =>
+                      v != null && !Number.isNaN(v) ? `${(v * 100).toFixed(1)}%` : "—",
                   },
                   { title: "当年交易日", dataIndex: "trading_days", width: 120 },
                 ]}
