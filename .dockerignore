@@ -1,0 +1,43 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# 运行时生成
+logs/
+docs/reports/
+.mplconfig/
+*.log
+
+# Docker 相关
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 前端
+ui/ops-console/node_modules/
+ui/ops-console/dist/
+
+# C++ 引擎构建
+engine/build/
+engine/.conan2/
+
+# 环境配置（在生产中通过其他方式传入）
+.env
+
+# 大数据文件
+*.parquet
+*.csv
+data/raw/
+data/cache/

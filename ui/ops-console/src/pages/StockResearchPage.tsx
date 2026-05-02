@@ -8,8 +8,10 @@ import {
   Col,
   DatePicker,
   Descriptions,
+  Divider,
   Input,
   InputNumber,
+  message,
   Row,
   Table,
   Typography,
@@ -28,6 +30,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import client from "../api/client";
 import { clearResearchRun, startRegimeRun, useResearchRun, type YearlyReturnRow } from "../researchRunStore";
+
+type CostScenarioRow = {
+  label: string;
+  buy_bps: number;
+  sell_bps: number;
+  slip_buy_bps: number;
+  slip_sell_bps: number;
+  annualized_return: number;
+  total_return: number;
+  max_drawdown: number;
+  sharpe_ratio: number;
+  annualized_turnover: number;
+  n_trading_days: number;
+};
 
 function pct(n: number | string | null | undefined): string {
   if (n === null || n === undefined) return "—";
@@ -55,6 +71,9 @@ export default function StockResearchPage() {
   const { loading, result } = useResearchRun();
   const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
   const searchTimer = useRef<number>(0);
+  const [costSensLoading, setCostSensLoading] = useState(false);
+  const [costSensRows, setCostSensRows] = useState<CostScenarioRow[] | null>(null);
+  const [costSensErr, setCostSensErr] = useState<string | null>(null);
 
   const candleRef = useRef<HTMLDivElement>(null);
   const equityRef = useRef<HTMLDivElement>(null);
@@ -219,6 +238,64 @@ export default function StockResearchPage() {
     };
   }, [result]);
 
+  useEffect(() => {
+    if (!result) {
+      setCostSensRows(null);
+      setCostSensErr(null);
+    }
+  }, [result]);
+
+  const costSensEligible =
+    initialCapital >= 1000 &&
+    (anchorCapitalEnabled || result?.backtest_mode === "cash_lots");
+
+  const runCostSensitivity = useCallback(async () => {
+    if (initialCapital < 1000) {
+      message.warning("请填写初始本金（≥1000 元）");
+      return;
+    }
+    if (!anchorCapitalEnabled && result?.backtest_mode !== "cash_lots") {
+      message.warning(
+        "成本敏感度基于整手现金仿真：请先勾选「整手现金账户回测」并运行主回测，或在本页已加载整手现金回测结果后再扫描。",
+      );
+      return;
+    }
+    if (!result?.series?.length) {
+      message.warning("请先运行一次主回测，再执行成本敏感度扫描");
+      return;
+    }
+    const cap =
+      result.initial_capital != null && result.initial_capital > 0
+        ? result.initial_capital
+        : initialCapital;
+    const start = range[0].format("YYYYMMDD");
+    const end = range[1].format("YYYYMMDD");
+    setCostSensLoading(true);
+    setCostSensErr(null);
+    try {
+      const body: Record<string, string | number> = {
+        start,
+        end,
+        initial_capital: cap,
+      };
+      if (!poolOnly && tsCode.trim()) body.ts_code = tsCode.trim().toUpperCase();
+      const { data } = await client.post<{ scenarios: CostScenarioRow[] }>(
+        "/api/research/regime-cost-sensitivity",
+        body,
+        { timeout: 600_000 },
+      );
+      setCostSensRows(data.scenarios ?? []);
+      message.success("成本与执行敏感度计算完成（数据只加载一次）");
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      const d = err.response?.data?.detail ?? "请求失败";
+      setCostSensErr(d);
+      message.error(d);
+    } finally {
+      setCostSensLoading(false);
+    }
+  }, [result, range, poolOnly, tsCode, anchorCapitalEnabled, initialCapital]);
+
   function run() {
     const start = range[0].format("YYYYMMDD");
     const end = range[1].format("YYYYMMDD");
@@ -344,6 +421,70 @@ export default function StockResearchPage() {
             )}
           </Col>
         </Row>
+
+        {costSensEligible ? (
+          <>
+            <Divider style={{ margin: "20px 0 12px" }} />
+            <Typography.Title level={5} style={{ marginTop: 0 }}>
+              成本与执行敏感度（整手现金）
+            </Typography.Title>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+              与下方所选<strong>区间</strong>、<strong>全市场/对照票</strong>一致，只加载一次全市场数据，对预设多组「买卖佣金 + 双边滑点」重放现金仿真（含组合止损）。请先运行主回测后再点扫描；本金优先使用<strong>最近一次主回测</strong>回显值。
+              {result?.backtest_mode === "cash_lots" && !anchorCapitalEnabled ? (
+                <>
+                  {" "}
+                  当前主回测为整手现金结果但「整手现金账户回测」未勾选（常见于刷新页面后）：仍可扫描；重新勾选可修改本金并再跑主回测。
+                </>
+              ) : null}
+            </Typography.Paragraph>
+            <Button
+              type="default"
+              loading={costSensLoading}
+              disabled={loading || !result?.series?.length}
+              onClick={() => void runCostSensitivity()}
+            >
+              运行成本敏感度扫描
+            </Button>
+            {!result?.series?.length ? (
+              <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+                完成主回测后可用
+              </Typography.Text>
+            ) : null}
+            {costSensErr ? (
+              <Typography.Paragraph type="danger" style={{ marginTop: 8 }}>
+                {costSensErr}
+              </Typography.Paragraph>
+            ) : null}
+            {costSensRows && costSensRows.length > 0 ? (
+              <Table<CostScenarioRow>
+                style={{ marginTop: 12 }}
+                size="small"
+                rowKey={(r) => r.label}
+                pagination={false}
+                tableLayout="fixed"
+                scroll={{ x: 900 }}
+                columns={[
+                  { title: "场景", dataIndex: "label", width: 140, ellipsis: true },
+                  { title: "买佣bps", dataIndex: "buy_bps", width: 72, align: "right" },
+                  { title: "卖佣bps", dataIndex: "sell_bps", width: 72, align: "right" },
+                  { title: "买滑点", dataIndex: "slip_buy_bps", width: 72, align: "right" },
+                  { title: "卖滑点", dataIndex: "slip_sell_bps", width: 72, align: "right" },
+                  { title: "年化", dataIndex: "annualized_return", width: 80, render: (v: number) => pct(v) },
+                  { title: "总收益", dataIndex: "total_return", width: 80, render: (v: number) => pct(v) },
+                  { title: "最大回撤", dataIndex: "max_drawdown", width: 84, render: (v: number) => pct(v) },
+                  { title: "夏普", dataIndex: "sharpe_ratio", width: 64 },
+                  {
+                    title: "年化换手",
+                    dataIndex: "annualized_turnover",
+                    width: 84,
+                    render: (v: number) => `${(v * 100).toFixed(1)}%`,
+                  },
+                ]}
+                dataSource={costSensRows}
+              />
+            ) : null}
+          </>
+        ) : null}
       </Card>
 
       {result && (

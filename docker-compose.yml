@@ -1,0 +1,154 @@
+# A股量化交易系统 — Docker Compose 一键部署
+#
+# 使用方式:
+#   cp .env.example .env        # 填入 Tushare Token 等配置
+#   docker compose up -d        # 启动所有服务
+#   docker compose logs -f      # 查看日志
+#
+# 访问 http://localhost:8080 打开前端控制台
+#
+# 首次启动后需要初始化数据库:
+#   docker compose exec backend python -c "
+# from data.writers.clickhouse_writer import ClickHouseWriter
+# from data.writers.postgres_writer import PostgresWriter
+# from data.common.config import Config
+# cfg = Config.load('data/config/settings.yaml', 'data/config/sources.yaml')
+# ClickHouseWriter(...).init_tables()
+# PostgresWriter(...).init_tables()
+# "
+#
+# 回填数据:
+#   docker compose exec backend python scripts/backfill_daily.py
+#   docker compose exec backend python scripts/backfill_valuation.py
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ─── 时序数据库（行情数据） ──────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: quant-clickhouse
+    hostname: clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"   # HTTP 接口
+      - "9000:9000"   # 原生协议
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-log:/var/log/clickhouse-server
+      - ./data/init/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-create-quant-db.sql:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    logging: *default-logging
+    networks:
+      - quant-net
+
+  # ─── 关系数据库（估值、股票信息） ────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: quant-postgres
+    hostname: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: quant
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-quant123}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    logging: *default-logging
+    networks:
+      - quant-net
+
+  # ─── 缓存 ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: quant-redis
+    hostname: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    logging: *default-logging
+    networks:
+      - quant-net
+
+  # ─── Python 后端（FastAPI） ─────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quant-backend
+    hostname: backend
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      # 数据库连接（hostname 指向服务名）
+      CH_HOST: clickhouse
+      CH_PORT: 9000
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: postgres
+      PG_PASSWORD: ${PG_PASSWORD:-quant123}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # Tushare
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      # 服务绑定
+      QUANT_OPS_BIND: 0.0.0.0
+      QUANT_OPS_TRUSTED_HOSTS: "*"
+      # 日志
+      LOG_LEVEL: INFO
+    volumes:
+      # 挂载 .env 配置
+      - ./.env:/app/.env:ro
+      # 持久化日志
+      - ./logs:/app/logs
+      # 报告图表
+      - ./docs/reports:/app/docs/reports
+    depends_on:
+      clickhouse:
+        condition: service_started
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+    logging: *default-logging
+    networks:
+      - quant-net
+
+  # ─── 前端控制台（Nginx） ───────────────────────────────
+  frontend:
+    build:
+      context: ./ui/ops-console
+      dockerfile: Dockerfile
+    container_name: quant-frontend
+    hostname: frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    logging: *default-logging
+    networks:
+      - quant-net
+
+volumes:
+  clickhouse-data:
+  clickhouse-log:
+  postgres-data:
+  redis-data:
+
+networks:
+  quant-net:
+    name: quant-network
+    driver: bridge

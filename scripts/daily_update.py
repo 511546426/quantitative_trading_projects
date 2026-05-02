@@ -20,10 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data.common.config import Config
+from data.common.db import get_ch, get_pg
 from data.common.calendar import TradingCalendar
 from data.fetchers.tushare_fetcher import TushareFetcher
-from data.writers.clickhouse_writer import ClickHouseWriter
-from data.writers.postgres_writer import PostgresWriter
 from data.cleaners.reference_cleaner import ReferenceCleaner
 from data.pipeline.daily_pipeline import DailyPipeline
 
@@ -42,24 +41,10 @@ logger = logging.getLogger("daily_update")
 
 def build_pipeline(cfg: Config) -> tuple[DailyPipeline, TradingCalendar]:
     """组装所有组件，返回 pipeline 和 calendar"""
-    ch = ClickHouseWriter(
-        host=cfg.get("database.clickhouse.host", "localhost"),
-        port=int(cfg.get("database.clickhouse.port", 9000)),
-        database="quant",
-        user=cfg.get("database.clickhouse.user", "default"),
-        password=cfg.get("database.clickhouse.password", ""),
-    )
-    ch.connect()
+    ch = get_ch()
     ch.init_tables()
 
-    pg = PostgresWriter(
-        host=cfg.get("database.postgres.host", "localhost"),
-        port=int(cfg.get("database.postgres.port", 5432)),
-        database="quant",
-        user=cfg.get("database.postgres.user", "postgres"),
-        password=cfg.get("database.postgres.password", ""),
-    )
-    pg.connect()
+    pg = get_pg()
     pg.init_tables()
 
     token = cfg.get("sources.tushare.token", "")

@@ -18,9 +18,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from data.common.config import Config
-from data.writers.clickhouse_writer import ClickHouseWriter
-from data.writers.postgres_writer import PostgresWriter
+from data.common.db import get_ch, get_pg
 from ui.server.config import LOG_PATHS
 from ui.server.deps import require_api_key
 
@@ -60,32 +58,12 @@ def _validate_ts_code(ts_code: str) -> str:
     return u
 
 
-@lru_cache(maxsize=1)
-def _ch() -> ClickHouseWriter:
-    cfg = Config.load("data/config/settings.yaml", "data/config/sources.yaml")
-    ch = ClickHouseWriter(
-        host=cfg.get("database.clickhouse.host", "localhost"),
-        port=int(cfg.get("database.clickhouse.port", 9000)),
-        database="quant",
-        user=cfg.get("database.clickhouse.user", "default"),
-        password=cfg.get("database.clickhouse.password", ""),
-    )
-    ch.connect()
-    return ch
+def _ch():
+    return get_ch()
 
 
-@lru_cache(maxsize=1)
-def _pg() -> PostgresWriter:
-    cfg = Config.load("data/config/settings.yaml", "data/config/sources.yaml")
-    pg = PostgresWriter(
-        host=cfg.get("database.postgres.host", "localhost"),
-        port=int(cfg.get("database.postgres.port", 5432)),
-        database="quant",
-        user=cfg.get("database.postgres.user", "postgres"),
-        password=cfg.get("database.postgres.password", ""),
-    )
-    pg.connect()
-    return pg
+def _pg():
+    return get_pg()
 
 
 @router.get("/stocks")
@@ -266,6 +244,69 @@ class RegimeModelRunRequest(BaseModel):
         return v
 
 
+class RegimeCostSensitivityRequest(BaseModel):
+    """整手现金路径下，单次加载、多组佣金/滑点重放（与主回测同区间）。"""
+
+    ts_code: str | None = Field(
+        None,
+        description="可选。留空=全市场组合；与主回测一致。",
+    )
+    start: str = Field(..., description="YYYYMMDD")
+    end: str = Field(..., description="YYYYMMDD")
+    initial_capital: float = Field(
+        ...,
+        description="必须与主回测现金模式一致的正数本金（元）。",
+        ge=1_000,
+        le=1e12,
+    )
+
+    @field_validator("ts_code", mode="before")
+    @classmethod
+    def _empty_ts_none_cost(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
+def _run_regime_cost_sensitivity_with_file_log(
+    date_start: str,
+    date_end: str,
+    ts_code: str | None,
+    initial_capital: float,
+) -> dict[str, Any]:
+    from strategy.web_api import run_regime_cost_sensitivity_for_web
+
+    log_path = LOG_PATHS["research-regime"]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    strat_log = logging.getLogger("multifactor_v4")
+    fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    ts_disp = ts_code or "(pool-only)"
+    strat_log.addHandler(fh)
+    try:
+        strat_log.info(
+            "======== regime-cost-sensitivity begin ts=%s %s–%s cap=%.0f ========",
+            ts_disp,
+            date_start,
+            date_end,
+            float(initial_capital),
+        )
+        out = run_regime_cost_sensitivity_for_web(
+            date_start, date_end, ts_code, float(initial_capital), scenarios=None
+        )
+        strat_log.info("======== regime-cost-sensitivity end (ok) ========")
+        return out
+    except Exception:
+        strat_log.exception("======== regime-cost-sensitivity end (error) ========")
+        raise
+    finally:
+        strat_log.removeHandler(fh)
+        fh.close()
+
+
 def _run_regime_model_for_web_with_file_log(
     date_start: str,
     date_end: str,
@@ -276,7 +317,7 @@ def _run_regime_model_for_web_with_file_log(
     在线程内执行 v4.1，并把 ``multifactor_v4`` 日志追加写入 ``logs/research_regime.log``，
     供 WebSocket 日志流订阅（与回填日志同一机制）。
     """
-    from strategy.examples.regime_switching_strategy import run_regime_model_for_web
+    from strategy.web_api import run_regime_model_for_web
 
     log_path = LOG_PATHS["research-regime"]
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -365,5 +406,36 @@ async def regime_model_run(body: RegimeModelRunRequest) -> dict[str, Any]:
             out["bars"] = []
     else:
         out["bars"] = []
+    out["as_of"] = datetime.utcnow().isoformat() + "Z"
+    return out
+
+
+@router.post("/regime-cost-sensitivity")
+async def regime_cost_sensitivity(body: RegimeCostSensitivityRequest) -> dict[str, Any]:
+    """
+    在 **整手现金** 假设下，对固定若干组「买卖佣金 bps + 双边滑点 bps」重放同一区间回测（**数据只加载一次**）。
+    用于成本与执行摩擦敏感度检查；与 ``/regime-model-run`` 的因子与调仓逻辑一致。
+    """
+    raw_ts = body.ts_code
+    ts_norm: str | None = _validate_ts_code(raw_ts) if raw_ts else None
+    s = _norm_ymd(body.start)
+    e = _norm_ymd(body.end)
+    if s > e:
+        raise HTTPException(400, "start 不能晚于 end")
+    try:
+        out = await asyncio.shield(
+            asyncio.to_thread(
+                _run_regime_cost_sensitivity_with_file_log,
+                s,
+                e,
+                ts_norm,
+                float(body.initial_capital),
+            )
+        )
+    except ValueError as ex:
+        raise HTTPException(400, str(ex)) from ex
+    except Exception as ex:
+        logger.exception("regime cost sensitivity failed")
+        raise HTTPException(503, str(ex)) from ex
     out["as_of"] = datetime.utcnow().isoformat() + "Z"
     return out
