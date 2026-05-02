@@ -43,6 +43,9 @@ export type RegimeRun = {
   /** 传入 initial_capital 时为 cash_lots（整手现金），否则为 fractional（理想权重+杠杆） */
   backtest_mode?: "cash_lots" | "fractional";
   benchmark_label?: string;
+  /** 后端实际使用的回测起止日 YYYYMMDD */
+  date_start?: string;
+  date_end?: string;
   name: string;
   model: string;
   bars: BarRow[];

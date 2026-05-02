@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gc
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -30,6 +31,20 @@ from strategy.backtest.metrics import calc_full_metrics
 
 logger = logging.getLogger(__name__)
 
+LOOKBACK_CALENDAR_DAYS = 420
+
+
+def _lookback_start(date_start: str) -> str:
+    """将用户请求的起始日期前推约 300 个交易日（420 自然日），
+    确保 MA60 / MOM120 / 52 周高点等因子有足够回看数据。"""
+    dt = datetime.strptime(date_start, "%Y%m%d")
+    lb_dt = dt - timedelta(days=LOOKBACK_CALENDAR_DAYS)
+    return lb_dt.strftime("%Y%m%d")
+
+
+def _report_start_ts(date_start: str) -> pd.Timestamp:
+    return pd.Timestamp(f"{date_start[:4]}-{date_start[4:6]}-{date_start[6:8]}")
+
 
 def _load_regime_web_panel(
     ch,
@@ -37,14 +52,23 @@ def _load_regime_web_panel(
     date_start: str,
     date_end: str,
     ts_code: str | None,
+    *,
+    load_start: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series | None, str, bool]:
-    """加载行情/池/估值并计算 signal。"""
+    """加载行情/池/估值并计算 signal。
+
+    Parameters
+    ----------
+    load_start : str | None
+        实际数据加载起始日（含 lookback 缓冲）。为 None 时等于 date_start。
+    """
+    actual_load_start = load_start or date_start
     ts_key = (ts_code or "").strip().upper()
     pool_only = ts_key == ""
-    close, amount = load_price(ch, date_start, date_end)
+    close, amount = load_price(ch, actual_load_start, date_end)
     exclude = load_exclude_list(pg)
     try:
-        pb, pe_ttm, circ_mv = load_valuation(pg, date_start, date_end)
+        pb, pe_ttm, circ_mv = load_valuation(pg, actual_load_start, date_end)
     except Exception as e:
         logger.warning("估值加载失败: %s", e)
         pb, pe_ttm, circ_mv = None, None, None
@@ -53,7 +77,7 @@ def _load_regime_web_panel(
     del amount
     gc.collect()
 
-    index_close = load_index_close(ch, BENCHMARK, date_start, date_end)
+    index_close = load_index_close(ch, BENCHMARK, actual_load_start, date_end)
 
     active = universe.any(axis=0)
     if active.sum() < universe.shape[1]:
@@ -97,11 +121,15 @@ def run_regime_cost_sensitivity_for_web(
     cfg = __import__("data.common.config", fromlist=["Config"]).Config.load(
         "data/config/settings.yaml", "data/config/sources.yaml"
     )
+    lb_start = _lookback_start(date_start)
+    rpt_ts = _report_start_ts(date_start)
+
     ch, pg = connect_db(cfg)
     try:
         close, signal, index_close, ts_key, pool_only = _load_regime_web_panel(
-            ch, pg, date_start, date_end, ts_code
+            ch, pg, date_start, date_end, ts_code, load_start=lb_start,
         )
+        close_sim = close.loc[rpt_ts:]
         out_rows: list[dict[str, Any]] = []
         for sc in rows:
             label = str(sc.get("label", ""))
@@ -110,7 +138,7 @@ def run_regime_cost_sensitivity_for_web(
             slpb = float(sc["slip_buy_bps"])
             slps = float(sc["slip_sell_bps"])
             net_ret, turnover, _w = simulate_cash_account_backtest(
-                close, signal, ic,
+                close_sim, signal, ic,
                 top_n=TOP_N, rebal_freq=REBAL_FREQ, inertia=INERTIA,
                 buy_cost_bps=bb, sell_cost_bps=sb,
                 slip_buy_bps=slpb, slip_sell_bps=slps,
@@ -151,22 +179,30 @@ def run_regime_model_for_web(
     ts_code: str | None,
     initial_capital: float | None = None,
 ) -> dict[str, Any]:
-    """与 main() 相同的因子、TOP_N、成本与组合止损逻辑。"""
+    """与 main() 相同的因子、TOP_N、成本与组合止损逻辑。
+
+    数据加载自动前推约 300 个交易日作为因子回看缓冲，
+    最终绩效 / 净值序列 / 分年收益仅覆盖用户请求的 ``[date_start, date_end]`` 区间。
+    """
+    lb_start = _lookback_start(date_start)
+    rpt_ts = _report_start_ts(date_start)
+
     cfg = __import__("data.common.config", fromlist=["Config"]).Config.load(
         "data/config/settings.yaml", "data/config/sources.yaml"
     )
     ch, pg = connect_db(cfg)
     try:
         close, signal, index_close, ts_key, pool_only = _load_regime_web_panel(
-            ch, pg, date_start, date_end, ts_code
+            ch, pg, date_start, date_end, ts_code, load_start=lb_start,
         )
 
         ic_use = float(initial_capital) if initial_capital is not None and float(initial_capital) > 0 else 0.0
         use_cash_lots = ic_use > 0
 
         if use_cash_lots:
+            close_sim = close.loc[rpt_ts:]
             net_ret, turnover, weights = simulate_cash_account_backtest(
-                close, signal, ic_use,
+                close_sim, signal, ic_use,
                 top_n=TOP_N, rebal_freq=REBAL_FREQ, inertia=INERTIA,
             )
         else:
@@ -183,6 +219,10 @@ def run_regime_model_for_web(
         gc.collect()
 
         net_ret = apply_portfolio_stop(net_ret, index_close=index_close)
+
+        net_ret = net_ret.loc[rpt_ts:]
+        turnover = turnover.reindex(net_ret.index).fillna(0.0)
+
         metrics = calc_full_metrics(net_ret, turnover)
 
         def _json_metrics(m: dict) -> dict[str, Any]:
@@ -240,7 +280,7 @@ def run_regime_model_for_web(
             "backtest_mode": "cash_lots" if use_cash_lots else "fractional",
             "metrics_portfolio": _json_metrics(metrics),
             "yearly_returns": yearly_returns_table(
-                net_ret, turnover.reindex(net_ret.index).fillna(0.0)
+                net_ret, turnover,
             ),
             "series": series,
         }

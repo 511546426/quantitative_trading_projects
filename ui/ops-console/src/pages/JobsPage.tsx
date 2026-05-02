@@ -4,6 +4,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import client from "../api/client";
+import { apiErrorDetail } from "../utils";
 
 type JobRow = {
   id: string;
@@ -21,7 +22,6 @@ export default function JobsPage() {
   const [loading, setLoading] = useState(false);
   const [dailyDate, setDailyDate] = useState("");
   const [dailyBusy, setDailyBusy] = useState(false);
-  /** 为 True 时 API 在启动子进程前截断 scripts 下对应该任务的 .log，避免无限追加 */
   const [resetLogBeforeBackfill, setResetLogBeforeBackfill] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -56,14 +56,20 @@ export default function JobsPage() {
         title: "每日更新输出",
         width: 720,
         content: (
-          <pre style={{ maxHeight: 360, overflow: "auto", fontSize: 12, whiteSpace: "pre-wrap" }}>
+          <pre
+            style={{
+              maxHeight: 360,
+              overflow: "auto",
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+            }}
+          >
             {data.output}
           </pre>
         ),
       });
     } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string } } };
-      message.error(err.response?.data?.detail ?? "请求失败");
+      message.error(apiErrorDetail(e, "请求失败"));
     } finally {
       setDailyBusy(false);
     }
@@ -78,23 +84,27 @@ export default function JobsPage() {
       cancelText: "取消",
       onOk: async () => {
         try {
-          const { data } = await client.post<{ job_id: string; log_key: string }>("/api/ops/backfill", {
-            target,
-            reset_log: resetLogBeforeBackfill,
-          });
+          const { data } = await client.post<{ job_id: string; log_key: string }>(
+            "/api/ops/backfill",
+            { target, reset_log: resetLogBeforeBackfill },
+          );
           message.success(`已启动 · job ${data.job_id}`);
           await refresh();
           navigate(`/logs?log=${encodeURIComponent(data.log_key)}`);
         } catch (e: unknown) {
-          const err = e as { response?: { data?: { detail?: string } } };
-          message.error(err.response?.data?.detail ?? "启动失败");
+          message.error(apiErrorDetail(e, "启动失败"));
         }
       },
     });
   }
 
   const columns: ColumnsType<JobRow> = [
-    { title: "Job", dataIndex: "id", width: 140, render: (t) => <Typography.Text code>{t}</Typography.Text> },
+    {
+      title: "Job",
+      dataIndex: "id",
+      width: 140,
+      render: (t) => <Typography.Text code>{t}</Typography.Text>,
+    },
     { title: "类型", dataIndex: "kind", width: 100 },
     { title: "命令", dataIndex: "ops_cmd", ellipsis: true },
     { title: "PID", dataIndex: "pid", width: 90 },
@@ -109,9 +119,14 @@ export default function JobsPage() {
       title: "日志",
       key: "lognav",
       width: 88,
-      render: (_: unknown, r: JobRow) =>
+      render: (_, r) =>
         r.log_key ? (
-          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => navigate(`/logs?log=${r.log_key}`)}>
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0 }}
+            onClick={() => navigate(`/logs?log=${r.log_key}`)}
+          >
             打开
           </Button>
         ) : (
@@ -122,14 +137,13 @@ export default function JobsPage() {
 
   return (
     <div>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>
-        任务与回填
-      </Typography.Title>
-      <Typography.Paragraph type="secondary">
+      {/* 页面标题 */}
+      <Typography.Title level={4} style={{ margin: "0 0 4px", fontSize: 18 }}>任务与回填</Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ margin: "0 0 16px", fontSize: 12 }}>
         后台回填通过 <Typography.Text code>ops.sh</Typography.Text> 启动；此处展示近期由控制台发起的任务 PID。
       </Typography.Paragraph>
 
-      <Card title="每日更新（同步）" style={{ marginBottom: 16 }} bordered={false}>
+      <Card title="每日更新（同步）" style={{ marginBottom: 16, background: "var(--bg-container)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
         <Space wrap align="start">
           <Input
             style={{ width: 200 }}
@@ -149,7 +163,7 @@ export default function JobsPage() {
         </Space>
       </Card>
 
-      <Card bordered={false}>
+      <Card style={{ background: "var(--bg-container)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
         <Checkbox
           checked={resetLogBeforeBackfill}
           onChange={(e) => setResetLogBeforeBackfill(e.target.checked)}

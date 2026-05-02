@@ -29,6 +29,16 @@ logger = logging.getLogger(__name__)
 _instances: dict[str, Any] = {}
 
 
+def _try_close(key: str) -> None:
+    """Safely close a cached connection without removing from cache."""
+    inst = _instances.get(key)
+    if inst is not None:
+        try:
+            inst.close()
+        except Exception:
+            pass
+
+
 def _load_cfg() -> Config:
     """加载配置（带缓存，避免重复加载 YAML）。"""
     cfg = Config.load("data/config/settings.yaml", "data/config/sources.yaml")
@@ -73,10 +83,7 @@ def get_ch(
 
     cache_key = "ch"
     if force_reconnect and cache_key in _instances:
-        try:
-            _instances[cache_key].close()
-        except Exception:
-            pass
+        _try_close(cache_key)
         del _instances[cache_key]
 
     if cache_key not in _instances:
@@ -90,7 +97,13 @@ def get_ch(
         )
         ch.connect()
         _instances[cache_key] = ch
-        logger.info("ClickHouse 连接已建立: %s:%d/%s", ch.host, ch.port, ch.database)
+        logger.info("ClickHouse 连接已建立: %s:%d/%s", ch._host, ch._port, ch._database)
+    elif _instances[cache_key]._client is None:
+        try:
+            _instances[cache_key].connect()
+        except Exception:
+            del _instances[cache_key]
+            raise
 
     return _instances[cache_key]
 
@@ -116,10 +129,7 @@ def get_pg(
 
     cache_key = "pg"
     if force_reconnect and cache_key in _instances:
-        try:
-            _instances[cache_key].close()
-        except Exception:
-            pass
+        _try_close(cache_key)
         del _instances[cache_key]
 
     if cache_key not in _instances:
@@ -133,7 +143,13 @@ def get_pg(
         )
         pg.connect()
         _instances[cache_key] = pg
-        logger.info("PostgreSQL 连接已建立: %s:%d/%s", pg.host, pg.port, pg.database)
+        logger.info("PostgreSQL 连接已建立: %s:%d/%s", pg._host, pg._port, pg._database)
+    elif _instances[cache_key]._conn is None:
+        try:
+            _instances[cache_key].connect()
+        except Exception:
+            del _instances[cache_key]
+            raise
 
     return _instances[cache_key]
 

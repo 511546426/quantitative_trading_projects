@@ -37,6 +37,10 @@ services:
     ports:
       - "8123:8123"   # HTTP 接口
       - "9000:9000"   # 原生协议
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-quant123}
+      CLICKHOUSE_DB: quant
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-log:/var/log/clickhouse-server
@@ -111,7 +115,7 @@ services:
     volumes:
       # 挂载 .env 配置
       - ./.env:/app/.env:ro
-      # 持久化日志
+      # 持久化日志（所有日志统一写入 logs/）
       - ./logs:/app/logs
       # 报告图表
       - ./docs/reports:/app/docs/reports

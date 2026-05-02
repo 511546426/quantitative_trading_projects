@@ -9,12 +9,14 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 OPS_SH = PROJECT_DIR / "ops.sh"
 SCRIPTS_DIR = PROJECT_DIR / "scripts"
 
+_LOG_DIR = PROJECT_DIR / "logs"
+
 LOG_PATHS: dict[str, Path] = {
-    "daily": SCRIPTS_DIR / "daily_update.log",
-    "backfill-daily": SCRIPTS_DIR / "backfill_daily.log",
-    "backfill-index": SCRIPTS_DIR / "backfill_index.log",
-    "backfill-valuation": SCRIPTS_DIR / "backfill_valuation.log",
-    "research-regime": PROJECT_DIR / "logs" / "research_regime.log",
+    "daily": _LOG_DIR / "daily_update.log",
+    "backfill-daily": _LOG_DIR / "backfill_daily.log",
+    "backfill-index": _LOG_DIR / "backfill_index.log",
+    "backfill-valuation": _LOG_DIR / "backfill_valuation.log",
+    "research-regime": _LOG_DIR / "research_regime.log",
 }
 
 TIMEOUT_SYNC = int(os.environ.get("QUANT_OPS_SYNC_TIMEOUT", "120"))

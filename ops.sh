@@ -1,16 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="/home/lcw/quantitative_trading_projects"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${SCRIPT_DIR}"
 SCRIPTS_DIR="${PROJECT_DIR}/scripts"
 
 # Docker container names (current convention)
 DB_CONTAINERS=("clickhouse" "postgres" "redis")
 
-DAILY_LOG="${SCRIPTS_DIR}/daily_update.log"
-BACKFILL_DAILY_LOG="${SCRIPTS_DIR}/backfill_daily.log"
-BACKFILL_INDEX_LOG="${SCRIPTS_DIR}/backfill_index.log"
-BACKFILL_VALUATION_LOG="${SCRIPTS_DIR}/backfill_valuation.log"
+# .venv 优先（本地开发），不存在则用系统 python（Docker 容器内）
+if [[ -x "${PROJECT_DIR}/.venv/bin/python" ]]; then
+  PY="${PROJECT_DIR}/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PY="python3"
+elif command -v python >/dev/null 2>&1; then
+  PY="python"
+else
+  PY=""
+fi
+
+LOG_DIR="${PROJECT_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+DAILY_LOG="${LOG_DIR}/daily_update.log"
+BACKFILL_DAILY_LOG="${LOG_DIR}/backfill_daily.log"
+BACKFILL_INDEX_LOG="${LOG_DIR}/backfill_index.log"
+BACKFILL_VALUATION_LOG="${LOG_DIR}/backfill_valuation.log"
 
 ts() { date '+%F %T %Z'; }
 
@@ -90,8 +104,9 @@ container_running() {
 start_db() {
   require_project
   if ! docker_installed; then
-    echo "[ERROR] docker not found in PATH" >&2
-    exit 1
+    echo "[INFO] Docker 运行环境不在当前容器中。数据库容器由 docker compose 统一管理。"
+    echo "[INFO] 查看状态请使用: docker compose ps"
+    return 0
   fi
 
   for c in "${DB_CONTAINERS[@]}"; do
@@ -115,6 +130,11 @@ start_db() {
 
 stop_db() {
   require_project
+  if ! docker_installed; then
+    echo "[INFO] Docker 运行环境不在当前容器中。数据库容器由 docker compose 统一管理。"
+    echo "[INFO] 停止请使用: docker compose stop"
+    return 0
+  fi
   for c in "${DB_CONTAINERS[@]}"; do
     if container_exists "${c}" && container_running "${c}"; then
       echo "[..] stopping ${c} ..."
@@ -134,22 +154,28 @@ restart_db() {
 show_status() {
   require_project
   if ! docker_installed; then
-    echo "[ERROR] docker not found in PATH" >&2
-    exit 1
+    echo "== Container environment =="
+    echo "  Hostname: $(hostname 2>/dev/null || echo 'unknown')"
+    echo "  Python: $(python3 --version 2>/dev/null || echo 'unknown')"
+    echo "  Working dir: ${PROJECT_DIR}"
+    echo "  Script: ops.sh (no docker binary available — run on host for full status)"
+    echo
+    echo "== Port listener check =="
+    ss -ltn 2>/dev/null | grep -E ':(5432|6379|8123|8787|9000)\s' || echo "  (none detected — run on host for container status)"
+    return 0
   fi
 
-echo "== Docker containers =="
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' | (
-  read -r header || true
-  echo "${header}"
-  for c in "${DB_CONTAINERS[@]}"; do
-    docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' | awk -v name="${c}" '$1==name {print $0}'
-  done
-) || true
+  echo "== Docker containers =="
+  docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' | (
+    read -r header || true
+    echo "${header}"
+    for c in "${DB_CONTAINERS[@]}"; do
+      docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' | awk -v name="${c}" '$1==name {print $0}'
+    done
+  ) || true
 
   echo
   echo "== Host ports (LISTEN) =="
-  # best-effort, no dependency on grep/rg
   ss -ltn 2>/dev/null | python3 -c "import sys; ports={'5432','6379','8123','9000'}; \
 lines=[l.rstrip() for l in sys.stdin if 'LISTEN' in l]; \
 print('\\n'.join([l for l in lines if any(f':{p} ' in l or l.endswith(f':{p}') for p in ports)]))" || true
@@ -185,10 +211,10 @@ run_backfill_daily() {
   require_project
   start_db >/dev/null
 
-  local py="${PROJECT_DIR}/.venv/bin/python"
+  local py="${PY}"
   local script="${SCRIPTS_DIR}/backfill_daily.py"
-  if [[ ! -x "${py}" ]]; then
-    echo "[ERROR] venv python not found: ${py}" >&2
+  if [[ -z "${py}" ]]; then
+    echo "[ERROR] No python found (no .venv and no system python)" >&2
     exit 1
   fi
   if [[ ! -f "${script}" ]]; then
@@ -197,7 +223,7 @@ run_backfill_daily() {
   fi
 
   append_header "${BACKFILL_DAILY_LOG}" "BACKFILL DAILY (historical) — checkpointed"
-  (cd "${PROJECT_DIR}" && "${py}" "${script}") >> "${BACKFILL_DAILY_LOG}" 2>&1
+  (cd "${PROJECT_DIR}" && PYTHONPATH="${PROJECT_DIR}" "${py}" "${script}") >> "${BACKFILL_DAILY_LOG}" 2>&1
   echo "[OK] backfill-daily finished. log: ${BACKFILL_DAILY_LOG}"
 }
 
@@ -205,10 +231,10 @@ run_backfill_index() {
   require_project
   start_db >/dev/null
 
-  local py="${PROJECT_DIR}/.venv/bin/python"
+  local py="${PY}"
   local script="${SCRIPTS_DIR}/backfill_index.py"
-  if [[ ! -x "${py}" ]]; then
-    echo "[ERROR] venv python not found: ${py}" >&2
+  if [[ -z "${py}" ]]; then
+    echo "[ERROR] No python found (no .venv and no system python)" >&2
     exit 1
   fi
   if [[ ! -f "${script}" ]]; then
@@ -223,7 +249,7 @@ run_backfill_index() {
   fi
 
   append_header "${BACKFILL_INDEX_LOG}" "BACKFILL INDEX_DAILY ${start} ~ ${end}"
-  (cd "${PROJECT_DIR}" && "${py}" "${script}" "${start}" "${end}") >> "${BACKFILL_INDEX_LOG}" 2>&1
+  (cd "${PROJECT_DIR}" && PYTHONPATH="${PROJECT_DIR}" "${py}" "${script}" "${start}" "${end}") >> "${BACKFILL_INDEX_LOG}" 2>&1
   echo "[OK] backfill-index finished. log: ${BACKFILL_INDEX_LOG}"
 }
 
@@ -231,10 +257,10 @@ run_backfill_valuation() {
   require_project
   start_db >/dev/null
 
-  local py="${PROJECT_DIR}/.venv/bin/python"
+  local py="${PY}"
   local script="${SCRIPTS_DIR}/backfill_valuation.py"
-  if [[ ! -x "${py}" ]]; then
-    echo "[ERROR] venv python not found: ${py}" >&2
+  if [[ -z "${py}" ]]; then
+    echo "[ERROR] No python found (no .venv and no system python)" >&2
     exit 1
   fi
   if [[ ! -f "${script}" ]]; then
@@ -243,7 +269,7 @@ run_backfill_valuation() {
   fi
 
   append_header "${BACKFILL_VALUATION_LOG}" "BACKFILL VALUATION (historical) — checkpointed"
-  (cd "${PROJECT_DIR}" && "${py}" "${script}") >> "${BACKFILL_VALUATION_LOG}" 2>&1
+  (cd "${PROJECT_DIR}" && PYTHONPATH="${PROJECT_DIR}" "${py}" "${script}") >> "${BACKFILL_VALUATION_LOG}" 2>&1
   echo "[OK] backfill-valuation finished. log: ${BACKFILL_VALUATION_LOG}"
 }
 

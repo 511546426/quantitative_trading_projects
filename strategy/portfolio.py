@@ -215,7 +215,9 @@ def calc_portfolio_return(
     """净收益 = port_ret - cost。"""
     bcb = float(BUY_COST_BPS if buy_cost_bps is None else buy_cost_bps)
     scb = float(SELL_COST_BPS if sell_cost_bps is None else sell_cost_bps)
-    daily_ret = close.pct_change(fill_method=None).fillna(0).clip(-0.2, 0.2)
+    # ffill: 停牌/缺价期间按最后成交价计算收益率，
+    # 复牌日 pct_change 基于最后成交价→当日价，clip 兜底极端跳空。
+    daily_ret = close.ffill().pct_change(fill_method=None).fillna(0).clip(-0.2, 0.2)
     port_ret = (weights.shift(1) * daily_ret).sum(axis=1)
 
     w_diff = weights.diff().fillna(0)
@@ -360,6 +362,9 @@ def simulate_cash_account_backtest(
     bcb = float(buy_cost_bps if buy_cost_bps is not None else BUY_COST_BPS)
     scb = float(sell_cost_bps if sell_cost_bps is not None else SELL_COST_BPS)
     dates = close.index
+    # MTM 估值用前向填充价格：停牌/缺价时按最后成交价计算市值，
+    # 避免 NaN 导致持仓被零估值再恢复时出现虚假极端收益率。
+    close_mtm = close.ffill()
     cash = float(initial_cash)
     pending_settlement = 0.0
     pos: dict[str, int] = {}
@@ -370,11 +375,12 @@ def simulate_cash_account_backtest(
     turn_vals: list[float] = []
     w_rows: list[pd.Series] = []
 
-    def _equity_now(r: pd.Series, pend: float) -> float:
-        return float(cash + _mtm_positions_cash(pos, r) + pend)
+    def _equity_now(mtm_r: pd.Series, pend: float) -> float:
+        return float(cash + _mtm_positions_cash(pos, mtm_r) + pend)
 
     for i, dt in enumerate(dates):
         row = close.loc[dt]
+        mtm_row = close_mtm.loc[dt]
         prev_row = close.iloc[i - 1] if i > 0 else None
 
         cash += float(pending_settlement)
@@ -386,7 +392,7 @@ def simulate_cash_account_backtest(
         if deferred_syms is not None:
             syms = deferred_syms
             deferred_syms = None
-            eq_before_buy = _equity_now(row, pending_settlement)
+            eq_before_buy = _equity_now(mtm_row, pending_settlement)
             new_pos, bg, spent = _round_robin_buy_lots(
                 cash,
                 syms,
@@ -406,7 +412,7 @@ def simulate_cash_account_backtest(
 
         is_rebal = i % rebal_freq == 0
         if is_rebal:
-            eq_before_sell = _equity_now(row, pending_settlement)
+            eq_before_sell = _equity_now(mtm_row, pending_settlement)
             sg, net_pend, pos = _liquidate_all_limits(
                 pos,
                 row,
@@ -431,14 +437,14 @@ def simulate_cash_account_backtest(
 
         turn_vals.append(turn_t)
 
-        equity = _equity_now(row, pending_settlement)
+        equity = _equity_now(mtm_row, pending_settlement)
         equity_vals.append(equity)
 
         if equity > 1e-12:
             wser = pd.Series(0.0, index=close.columns, dtype=np.float64)
             for c, sh in pos.items():
                 if c in wser.index and sh > 0:
-                    px = float(row.get(c, np.nan))
+                    px = float(mtm_row.get(c, np.nan))
                     if np.isfinite(px) and px > 0:
                         wser.loc[c] = float(sh) * px / equity
             w_rows.append(wser)
@@ -449,6 +455,7 @@ def simulate_cash_account_backtest(
     raw_ret = equity_s.pct_change(fill_method=None)
     raw_ret = raw_ret.fillna(0.0)
     raw_ret.iloc[0] = 0.0
+    raw_ret = raw_ret.clip(-0.20, 0.20)
 
     turnover = pd.Series(turn_vals, index=dates, dtype=np.float64)
     weights_mv = pd.DataFrame(w_rows, index=dates, columns=close.columns).fillna(0.0)

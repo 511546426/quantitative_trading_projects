@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import os
 import re
 from datetime import datetime
 from functools import lru_cache
@@ -270,6 +272,16 @@ class RegimeCostSensitivityRequest(BaseModel):
         return v
 
 
+def _flush_log(fh: logging.FileHandler) -> None:
+    """Flush and fsync the FileHandler so log entries are visible on the host immediately."""
+    fh.flush()
+    if fh.stream and hasattr(fh.stream, "fileno"):
+        try:
+            os.fsync(fh.stream.fileno())
+        except (OSError, io.UnsupportedOperation):
+            pass
+
+
 def _run_regime_cost_sensitivity_with_file_log(
     date_start: str,
     date_end: str,
@@ -281,6 +293,8 @@ def _run_regime_cost_sensitivity_with_file_log(
     log_path = LOG_PATHS["research-regime"]
     log_path.parent.mkdir(parents=True, exist_ok=True)
     strat_log = logging.getLogger("multifactor_v4")
+    old_level = strat_log.level
+    strat_log.setLevel(logging.INFO)
     fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
@@ -294,17 +308,21 @@ def _run_regime_cost_sensitivity_with_file_log(
             date_end,
             float(initial_capital),
         )
+        _flush_log(fh)
         out = run_regime_cost_sensitivity_for_web(
             date_start, date_end, ts_code, float(initial_capital), scenarios=None
         )
         strat_log.info("======== regime-cost-sensitivity end (ok) ========")
+        _flush_log(fh)
         return out
     except Exception:
         strat_log.exception("======== regime-cost-sensitivity end (error) ========")
+        _flush_log(fh)
         raise
     finally:
         strat_log.removeHandler(fh)
         fh.close()
+        strat_log.setLevel(old_level)
 
 
 def _run_regime_model_for_web_with_file_log(
@@ -322,6 +340,10 @@ def _run_regime_model_for_web_with_file_log(
     log_path = LOG_PATHS["research-regime"]
     log_path.parent.mkdir(parents=True, exist_ok=True)
     strat_log = logging.getLogger("multifactor_v4")
+    # Ensure the logger allows INFO-level messages through to our handler,
+    # regardless of whatever level the root logger was configured at.
+    old_level = strat_log.level
+    strat_log.setLevel(logging.INFO)
     fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
@@ -334,17 +356,21 @@ def _run_regime_model_for_web_with_file_log(
             date_start,
             date_end,
         )
+        _flush_log(fh)
         out = run_regime_model_for_web(
             date_start, date_end, ts_code, initial_capital=initial_capital
         )
         strat_log.info("======== regime-model-run end (ok) ========")
+        _flush_log(fh)
         return out
     except Exception:
         strat_log.exception("======== regime-model-run end (error) ========")
+        _flush_log(fh)
         raise
     finally:
         strat_log.removeHandler(fh)
         fh.close()
+        strat_log.setLevel(old_level)
 
 
 @router.post("/regime-model-run")

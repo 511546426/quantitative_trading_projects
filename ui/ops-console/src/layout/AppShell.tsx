@@ -6,25 +6,18 @@ import {
   DeploymentUnitOutlined,
   FileTextOutlined,
   LineChartOutlined,
+  MenuFoldOutlined,
+  MenuOutlined,
   WalletOutlined,
 } from "@ant-design/icons";
-import {
-  Badge,
-  Button,
-  Drawer,
-  Form,
-  Input,
-  Layout,
-  Menu,
-  Space,
-  Typography,
-} from "antd";
+import { Badge, Button, Drawer, Form, Input, Layout, Menu, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { fetchHealth, fetchMeta } from "../api/client";
+import { useHealth } from "../hooks/useHealth";
+import { useMeta } from "../hooks/useMeta";
 import { getHttpTrace, subscribeHttpTrace } from "../api/traceStore";
 
-const { Header, Sider, Content, Footer } = Layout;
+const { Sider, Content } = Layout;
 
 const menu = [
   { key: "/", icon: <DashboardOutlined />, label: "总览" },
@@ -36,165 +29,167 @@ const menu = [
   { key: "/portfolio", icon: <WalletOutlined />, label: "持仓与流水" },
 ];
 
+const pageTitles: Record<string, string> = {
+  "/": "运行总览",
+  "/infra": "数据基建",
+  "/jobs": "任务与回填",
+  "/logs": "日志流",
+  "/research": "多因子组合回测",
+  "/backtest": "策略回测看板",
+  "/portfolio": "持仓与手工流水",
+};
+
 export default function AppShell() {
   const nav = useNavigate();
   const loc = useLocation();
-  const [authRequired, setAuthRequired] = useState(false);
+  const health = useHealth();
+  const meta = useMeta();
+  const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [keyForm] = Form.useForm();
   const [, traceTick] = useState(0);
-  const [healthClock, setHealthClock] = useState<string | null>(null);
-  const [healthOk, setHealthOk] = useState<boolean | null>(null);
-  const [healthPolledAt, setHealthPolledAt] = useState<string | null>(null);
+  const [, forceUpdate] = useState(0);
+  const [clock, setClock] = useState("");
 
+  // clock tick
   useEffect(() => {
-    fetchMeta()
-      .then((m) => setAuthRequired(m.auth_required))
-      .catch(() => {});
+    const id = window.setInterval(() => {
+      setClock(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+    }, 1000);
+    return () => window.clearInterval(id);
   }, []);
 
-  useEffect(() => subscribeHttpTrace(() => traceTick((n) => n + 1)), []);
-
+  // trace subscription
   useEffect(() => {
-    let cancelled = false;
-    const poll = () => {
-      fetchHealth()
-        .then((h) => {
-          if (cancelled) return;
-          setHealthOk(!!h.ok);
-          setHealthClock(h.server_time_utc ?? null);
-          setHealthPolledAt(new Date().toISOString());
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setHealthOk(false);
-          setHealthClock(null);
-          setHealthPolledAt(new Date().toISOString());
-        });
-    };
-    poll();
-    const id = window.setInterval(poll, 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
+    const unsub = subscribeHttpTrace(() => { traceTick((n) => n + 1); });
+    return () => { unsub(); };
+  }, []);
+
+  // API key change detection
+  useEffect(() => {
+    const id = window.setInterval(() => forceUpdate((n) => n + 1), 2000);
+    return () => window.clearInterval(id);
   }, []);
 
   const trace = getHttpTrace();
-
   const hasKey = !!localStorage.getItem("quant_ops_api_key");
+  const selectedKey = loc.pathname === "/" ? "/" : "/" + loc.pathname.split("/").filter(Boolean)[0];
+  const pageTitle = pageTitles[selectedKey] ?? "量化数据与容器编排";
+
+  const healthDot = health.ok === null ? "unknown" : health.ok ? "ok" : "error";
+
+  const authRequired = meta?.auth_required ?? false;
 
   return (
-    <Layout style={{ minHeight: "100%" }}>
-      <Sider width={220} breakpoint="lg" collapsedWidth={0}>
-        <div style={{ padding: "20px 16px 12px" }}>
-          <Typography.Text strong style={{ fontSize: 13, letterSpacing: "0.08em" }}>
-            QUANT
-            <span style={{ color: "#2f6feb", marginLeft: 4 }}>OPS</span>
+    <Layout style={{ minHeight: "100vh", background: "var(--bg-layout)" }}>
+      {/* ── Top Bar ── */}
+      <header
+        style={{
+          height: 48,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 16px",
+          background: "var(--bg-container)",
+          borderBottom: "1px solid var(--border)",
+          zIndex: 100,
+          position: "sticky",
+          top: 0,
+        }}
+      >
+        <Space>
+          <Button
+            type="text"
+            icon={collapsed ? <MenuOutlined /> : <MenuFoldOutlined />}
+            onClick={() => setCollapsed((c) => !c)}
+            style={{ color: "var(--text-secondary)", fontSize: 16, width: 32, height: 32 }}
+          />
+          <Typography.Text strong style={{ fontSize: 13, letterSpacing: "0.08em", color: "var(--text-primary)" }}>
+            QUANT<span style={{ color: "var(--primary)", marginLeft: 2 }}>OPS</span>
           </Typography.Text>
-          <Typography.Paragraph
-            type="secondary"
-            style={{ margin: "6px 0 0", fontSize: 11, lineHeight: 1.45 }}
-          >
-            Control Plane · 卖方级运维壳
-          </Typography.Paragraph>
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[loc.pathname === "/" ? "/" : loc.pathname]}
-          items={menu}
-          onClick={({ key }) => nav(key)}
-          style={{ borderInlineEnd: "none" }}
-        />
-      </Sider>
-      <Layout>
-        <Header
+          <span style={{ width: 1, height: 20, background: "var(--border)", margin: "0 8px" }} />
+          <Typography.Text style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            {pageTitle}
+          </Typography.Text>
+        </Space>
+
+        <Space size="middle">
+          <Space size={4}>
+            <span className={`status-dot ${healthDot}`} />
+            <Typography.Text style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              {health.serverTime ? health.serverTime.slice(11, 19) + " UTC" : "—"}
+            </Typography.Text>
+          </Space>
+          <Typography.Text code style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+            {clock}
+          </Typography.Text>
+          {authRequired ? (
+            <Badge status={hasKey ? "success" : "warning"} text="Key" style={{ fontSize: 11 }} />
+          ) : null}
+          <Button type="text" size="small" icon={<ApiOutlined />} onClick={() => setDrawer(true)} style={{ color: "var(--text-secondary)" }} />
+        </Space>
+      </header>
+
+      <Layout style={{ background: "var(--bg-layout)", flex: 1 }}>
+        {/* ── Sidebar ── */}
+        <Sider
+          width={200}
+          collapsedWidth={48}
+          collapsible
+          collapsed={collapsed}
+          trigger={null}
           style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            paddingInline: 20,
-            borderBottom: "1px solid #1e2836",
+            background: "var(--bg-sider)",
+            borderRight: "1px solid var(--border)",
+            overflow: "auto",
           }}
         >
-          <Typography.Title level={5} style={{ margin: 0, fontWeight: 600 }}>
-            量化数据与容器编排
-          </Typography.Title>
-          <Space>
-            {authRequired ? (
-              <Badge status={hasKey ? "success" : "warning"} text="API Key" />
-            ) : (
-              <Badge status="default" text="无 Key 模式" />
-            )}
-            <Button type="default" icon={<ApiOutlined />} onClick={() => setDrawer(true)}>
-              连接与凭据
-            </Button>
-          </Space>
-        </Header>
-        <Content style={{ margin: 20, paddingBottom: 8 }}>
-          <Outlet />
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            items={menu}
+            onClick={({ key }) => { nav(key); if (collapsed) setCollapsed(false); }}
+            style={{
+              background: "transparent",
+              borderInlineEnd: "none",
+              marginTop: 4,
+            }}
+          />
+        </Sider>
+
+        {/* ── Content ── */}
+        <Content style={{ padding: 20, overflow: "auto" }}>
+          <div className="content-area">
+            <Outlet />
+          </div>
         </Content>
-        <Footer
-          style={{
-            margin: 0,
-            padding: "8px 20px",
-            borderTop: "1px solid #1e2836",
-            background: "#0c1017",
-            fontSize: 11,
-            color: "rgba(255,255,255,0.45)",
-            lineHeight: 1.5,
-          }}
-        >
-          <Space size="middle" wrap split={<span style={{ color: "#1e2836" }}>|</span>}>
-            <span>
-              健康检查 UTC{" "}
-              <Typography.Text code style={{ fontSize: 11, color: "rgba(255,255,255,0.65)" }}>
-                {healthClock ?? "—"}
-              </Typography.Text>
-            </span>
-            <span>
-              状态{" "}
-              {healthOk === null ? "…" : healthOk ? <Badge status="success" text="可达" /> : <Badge status="error" text="不可达" />}
-            </span>
-            <span>
-              轮询本地{" "}
-              <Typography.Text code style={{ fontSize: 11, color: "rgba(255,255,255,0.65)" }}>
-                {healthPolledAt ? healthPolledAt.slice(11, 23) : "—"}
-              </Typography.Text>
-            </span>
-            <span>
-              最近响应头{" "}
-              <Typography.Text code style={{ fontSize: 11, color: "rgba(255,255,255,0.65)" }}>
-                {trace.serverTimeHeader ?? "—"}
-              </Typography.Text>
-            </span>
-            <span>
-              X-Request-ID{" "}
-              <Typography.Text
-                code
-                copyable={!!trace.requestId}
-                style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", maxWidth: 280 }}
-                ellipsis
-              >
-                {trace.requestId ?? "—"}
-              </Typography.Text>
-            </span>
-          </Space>
-        </Footer>
       </Layout>
 
-      <Drawer
-        title="连接与凭据"
-        open={drawer}
-        onClose={() => setDrawer(false)}
-        width={400}
+      {/* ── Footer ── */}
+      <footer
+        style={{
+          height: 28,
+          display: "flex",
+          alignItems: "center",
+          padding: "0 16px",
+          background: "var(--bg-container)",
+          borderTop: "1px solid var(--border)",
+          fontSize: 11,
+          color: "var(--text-tertiary)",
+          gap: 16,
+        }}
       >
+        <span>X-Request-ID: {trace.requestId ?? "—"}</span>
+        <span>Server-Time: {trace.serverTimeHeader ?? "—"}</span>
+        <span style={{ flex: 1 }} />
+        <span>v{health.serverTime ? "1.0" : "—"}</span>
+      </footer>
+
+      {/* ── API Key Drawer ── */}
+      <Drawer title="连接与凭据" open={drawer} onClose={() => setDrawer(false)} width={360}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          若服务端设置了环境变量 <Typography.Text code>QUANT_OPS_API_KEY</Typography.Text>
-          ，请在此填写相同值；请求头将携带{" "}
-          <Typography.Text code>X-API-Key</Typography.Text>，WebSocket 使用查询参数{" "}
-          <Typography.Text code>token</Typography.Text>。
+          若服务端设置了 <Typography.Text code>QUANT_OPS_API_KEY</Typography.Text>，请在此填写。
         </Typography.Paragraph>
         <Form
           form={keyForm}
@@ -206,21 +201,12 @@ export default function AppShell() {
             setDrawer(false);
           }}
         >
-          <Form.Item name="apiKey" label="API Key（可选）">
+          <Form.Item name="apiKey" label="API Key">
             <Input.Password placeholder="与 QUANT_OPS_API_KEY 一致" autoComplete="off" />
           </Form.Item>
           <Space>
-            <Button type="primary" htmlType="submit">
-              保存
-            </Button>
-            <Button
-              danger
-              onClick={() => {
-                localStorage.removeItem("quant_ops_api_key");
-                keyForm.resetFields();
-                setDrawer(false);
-              }}
-            >
+            <Button type="primary" htmlType="submit">保存</Button>
+            <Button danger onClick={() => { localStorage.removeItem("quant_ops_api_key"); keyForm.resetFields(); setDrawer(false); }}>
               清除
             </Button>
           </Space>

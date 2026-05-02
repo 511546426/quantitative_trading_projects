@@ -11,10 +11,7 @@ export default function InfraPage() {
     setLoading(op);
     setLast(null);
     try {
-      const { data } = await client.post<{ exit_code: number; output: string }>(
-        "/api/ops/sync",
-        { op, args: [] },
-      );
+      const { data } = await client.post<{ exit_code: number; output: string }>("/api/ops/sync", { op, args: [] });
       setLast({ code: data.exit_code, out: data.output, op });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -26,14 +23,12 @@ export default function InfraPage() {
 
   return (
     <div>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>
-        数据基建
-      </Typography.Title>
-      <Typography.Paragraph type="secondary">
+      <Typography.Title level={4} style={{ margin: "0 0 4px", fontSize: 18 }}>数据基建</Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ margin: "0 0 16px", fontSize: 12 }}>
         Docker 容器：ClickHouse / PostgreSQL / Redis。操作结果在下方「执行输出」。
       </Typography.Paragraph>
 
-      <Card bordered={false}>
+      <Card style={{ background: "var(--bg-container)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
         <Space wrap>
           <Button
             type="primary"
@@ -64,27 +59,21 @@ export default function InfraPage() {
         />
       )}
 
-      <Card title="执行输出" style={{ marginTop: 16 }} bordered={false}>
-        <pre
-          className="q-terminal-scroll"
-          style={{
-            margin: 0,
-            maxHeight: "min(55vh, 560px)",
-            overflow: "auto",
-            padding: 12,
-            background: "#080b10",
-            border: "1px solid #1e2836",
-            borderRadius: 6,
-            fontSize: 12,
-            lineHeight: 1.5,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            fontFamily:
-              'ui-monospace, "Cascadia Code", "SF Mono", Consolas, Menlo, monospace',
-          }}
-        >
-          {last?.out ?? "等待操作…"}
-        </pre>
+      <Card title="执行输出" style={{ marginTop: 16, background: "var(--bg-container)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
+        <pre className="q-terminal-scroll" style={{
+          margin: 0,
+          padding: 12,
+          background: "var(--bg-terminal)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          fontSize: 12,
+          lineHeight: 1.5,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          fontFamily: "var(--font-mono)",
+          maxHeight: "min(55vh, 560px)",
+          overflow: "auto",
+        }}>{last?.out ?? "等待操作…"}</pre>
       </Card>
     </div>
   );

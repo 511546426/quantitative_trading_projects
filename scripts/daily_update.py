@@ -26,7 +26,10 @@ from data.fetchers.tushare_fetcher import TushareFetcher
 from data.cleaners.reference_cleaner import ReferenceCleaner
 from data.pipeline.daily_pipeline import DailyPipeline
 
-LOG_FILE = Path(__file__).parent / "daily_update.log"
+_project_root = Path(__file__).resolve().parents[1]
+_log_dir = _project_root / "logs"
+_log_dir.mkdir(parents=True, exist_ok=True)
+LOG_FILE = _log_dir / "daily_update.log"
 
 logging.basicConfig(
     level=logging.INFO,
