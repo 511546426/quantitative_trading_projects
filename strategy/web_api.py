@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from strategy.config import (
-    START, END, BENCHMARK, TOP_N, REBAL_FREQ, INERTIA, LEVERAGE, REGIME_LEV_MULT,
+    BENCHMARK,
     DEFAULT_COST_SENSITIVITY_SCENARIOS,
 )
 from strategy.data_loader import (
@@ -23,7 +23,7 @@ from strategy.data_loader import (
 )
 from strategy.signal import build_universe, calc_signal, regime_bull_exante
 from strategy.portfolio import (
-    generate_weights, calc_portfolio_return, apply_portfolio_stop,
+    generate_weights, apply_portfolio_stop,
     simulate_cash_account_backtest,
     yearly_returns_table,
 )
@@ -129,7 +129,9 @@ def run_regime_cost_sensitivity_for_web(
         close, signal, index_close, ts_key, pool_only = _load_regime_web_panel(
             ch, pg, date_start, date_end, ts_code, load_start=lb_start,
         )
+        weights_target = generate_weights(signal)
         close_sim = close.loc[rpt_ts:]
+        weights_sim = weights_target.loc[rpt_ts:]
         out_rows: list[dict[str, Any]] = []
         for sc in rows:
             label = str(sc.get("label", ""))
@@ -138,8 +140,7 @@ def run_regime_cost_sensitivity_for_web(
             slpb = float(sc["slip_buy_bps"])
             slps = float(sc["slip_sell_bps"])
             net_ret, turnover, _w = simulate_cash_account_backtest(
-                close_sim, signal, ic,
-                top_n=TOP_N, rebal_freq=REBAL_FREQ, inertia=INERTIA,
+                close_sim, weights_sim, ic,
                 buy_cost_bps=bb, sell_cost_bps=sb,
                 slip_buy_bps=slpb, slip_sell_bps=slps,
             )
@@ -196,26 +197,15 @@ def run_regime_model_for_web(
             ch, pg, date_start, date_end, ts_code, load_start=lb_start,
         )
 
-        ic_use = float(initial_capital) if initial_capital is not None and float(initial_capital) > 0 else 0.0
-        use_cash_lots = ic_use > 0
+        ic_use = float(initial_capital) if initial_capital is not None and float(initial_capital) > 0 else 1_000_000.0
+        weights_target = generate_weights(signal)
 
-        if use_cash_lots:
-            close_sim = close.loc[rpt_ts:]
-            net_ret, turnover, weights = simulate_cash_account_backtest(
-                close_sim, signal, ic_use,
-                top_n=TOP_N, rebal_freq=REBAL_FREQ, inertia=INERTIA,
-            )
-        else:
-            weights = generate_weights(signal)
-            if float(LEVERAGE) != 1.0:
-                lev_ser = pd.Series(float(LEVERAGE), index=weights.index)
-                if index_close is not None:
-                    bflt = regime_bull_exante(index_close, weights.index).astype(np.float64)
-                    lev_ser = lev_ser * (1.0 + bflt * (float(REGIME_LEV_MULT) - 1.0))
-                weights = weights.multiply(lev_ser, axis=0)
-            net_ret, turnover = calc_portfolio_return(weights, close)
+        close_sim = close.loc[rpt_ts:]
+        net_ret, turnover, weights_mv = simulate_cash_account_backtest(
+            close_sim, weights_target.loc[rpt_ts:], ic_use,
+        )
 
-        del signal
+        del signal, weights_target
         gc.collect()
 
         net_ret = apply_portfolio_stop(net_ret, index_close=index_close)
@@ -256,7 +246,7 @@ def run_regime_model_for_web(
             else:
                 bench_eq = pd.Series(1.0, index=net_ret.index)
         else:
-            wcol = weights[ts_key].reindex(net_ret.index).fillna(0.0)
+            wcol = weights_mv[ts_key].reindex(net_ret.index).fillna(0.0)
             sc = close[ts_key].reindex(net_ret.index).ffill()
             st_ret = sc.pct_change(fill_method=None).fillna(0.0)
             bench_eq = (1 + st_ret).cumprod()
@@ -277,7 +267,7 @@ def run_regime_model_for_web(
             "benchmark_label": "CSI300买入持有" if pool_only else "标的买入持有",
             "date_start": date_start,
             "date_end": date_end,
-            "backtest_mode": "cash_lots" if use_cash_lots else "fractional",
+            "backtest_mode": "cash_lots",
             "metrics_portfolio": _json_metrics(metrics),
             "yearly_returns": yearly_returns_table(
                 net_ret, turnover,

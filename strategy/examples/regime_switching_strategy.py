@@ -44,39 +44,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # ═══════════════════════════════════════════════════════════
 
 from strategy.config import (
-    START, END,
+    START, END, INITIAL_CASH,
     W_MA60, W_RSI, W_RET60, W_PB, W_SIZE, W_EP, W_MOM120,
     MIN_AMOUNT, FALLEN_KNIFE, VOL_CUTOFF,
     TOP_N, REBAL_FREQ, INERTIA, LEVERAGE, REGIME_LEV_MULT,
     STOP_LOSS, STOP_LOSS_BULL, STOP_COOLDOWN,
     BUY_COST_BPS, SELL_COST_BPS,
-    A_SHARE_LOT, CASH_SLIP_BUY_BPS, CASH_SLIP_SELL_BPS,
-    CASH_LIMIT_UP_FRAC, CASH_LIMIT_DOWN_FRAC,
     BENCHMARK, TRADING_DAYS_PER_YEAR,
     DEFAULT_COST_SENSITIVITY_SCENARIOS,
 )
 
 from strategy.data_loader import (
     connect_db, load_price, load_valuation, load_exclude_list, load_index_close,
-    _ymd_to_ts, _slice_panel, _max_drawdown_in_sample,
 )
 
 from strategy.signal import (
-    _rsi, regime_bull_exante, build_universe, calc_signal,
+    regime_bull_exante, build_universe, calc_signal,
 )
 
 from strategy.portfolio import (
-    generate_weights, calc_portfolio_return,
-    _pick_top_for_rebalance, _mtm_positions_cash,
-    _round_robin_buy_lots, _liquidate_all_limits,
+    generate_weights,
     simulate_cash_account_backtest,
-    apply_portfolio_stop, portfolio_stop_invested_start,
-    lot_effective_top_n, weights_from_trading_panel,
+    apply_portfolio_stop,
+    weights_from_trading_panel,
     yearly_returns_table,
 )
 
 from strategy.web_api import (
-    _load_regime_web_panel,
     run_regime_model_for_web,
     run_regime_cost_sensitivity_for_web,
 )
@@ -100,6 +94,7 @@ __all__ = [n for n in _all_exports if isinstance(globals().get(n), (type, int, f
 # ═══════════════════════════════════════════════════════════
 
 def main():
+    ic = float(INITIAL_CASH)
     logger.info("=" * 60)
     logger.info("A 股多因子策略 v4.1  %s ~ %s", START, END)
     logger.info(
@@ -107,10 +102,9 @@ def main():
         W_MA60, W_RSI, W_RET60, W_PB, W_SIZE, W_EP, W_MOM120,
     )
     logger.info(
-        "组合: TOP=%d  调仓=%dd  惯性=%.2f  基线杠杆=%.2f  牛市杠杆×%.2f  "
-        "止损=非牛%.0f%%/牛%.0f%%",
-        TOP_N, REBAL_FREQ, INERTIA, LEVERAGE, REGIME_LEV_MULT,
-        STOP_LOSS * 100, STOP_LOSS_BULL * 100,
+        "组合: TOP=%d  调仓=%dd  惯性=%.2f  止损=非牛%.0f%%/牛%.0f%%  初始资金=¥%.0f",
+        TOP_N, REBAL_FREQ, INERTIA,
+        STOP_LOSS * 100, STOP_LOSS_BULL * 100, ic,
     )
     logger.info("=" * 60)
 
@@ -160,27 +154,17 @@ def main():
     del pb, pe_ttm, circ_mv, universe
     gc.collect()
 
-    # 权重
+    # 目标权重（无杠杆，和为 1.0）
     logger.info("生成权重 (TOP=%d, 调仓=%dd)...", TOP_N, REBAL_FREQ)
     weights = generate_weights(signal)
     del signal
     gc.collect()
 
-    if float(LEVERAGE) != 1.0:
-        lev_ser = pd.Series(float(LEVERAGE), index=weights.index)
-        if index_close is not None:
-            bflt = regime_bull_exante(index_close, weights.index).astype(np.float64)
-            lev_ser = lev_ser * (1.0 + bflt * (float(REGIME_LEV_MULT) - 1.0))
-        weights = weights.multiply(lev_ser, axis=0)
-
-    # 回测
-    logger.info("运行回测...")
-    net_ret, turnover = calc_portfolio_return(weights, close)
-
-    # 合理性检查
-    net_min = float(net_ret.min())
-    if net_min < -1.0:
-        logger.error("检测到不可能的日收益 %.4f，请检查数据！", net_min)
+    # 现金仿真回测
+    logger.info("运行现金仿真回测 (¥%.0f)...", ic)
+    net_ret, turnover, weights_mv = simulate_cash_account_backtest(
+        close, weights, ic,
+    )
 
     # 组合层止损
     net_ret = apply_portfolio_stop(net_ret, index_close=index_close)
@@ -188,29 +172,37 @@ def main():
     metrics = calc_full_metrics(net_ret, turnover)
 
     # 报告
+    port_eq = (1 + net_ret).cumprod() * ic
+    final_equity = float(port_eq.iloc[-1]) if len(port_eq) else ic
+    total_ret = final_equity / ic - 1
+
     print("\n" + "=" * 60)
-    print("  A 股多因子策略 v4.1 回测结果")
+    print("  A 股多因子策略 v4.1  现金仿真回测")
     print("=" * 60)
+    print(f"  初始资金:                ¥{ic:>10,.0f}")
+    print(f"  期末权益:                ¥{final_equity:>10,.0f}")
+    print(f"  总收益率:                {total_ret:>+10.1%}")
     print(format_report(metrics))
 
     yrows = yearly_returns_table(net_ret, turnover, min_days_per_year=5)
-    yearly = {int(r["year"]): float(r["net_return"]) for r in yrows}
 
-    print(f"\n  {'年份':>4}  {'年度收益':>10}  {'年内回撤':>10}  {'年化换手':>10}")
-    print("  " + "-" * 48)
+    print(f"\n  {'年份':>4}  {'年度收益':>10}  {'年内回撤':>10}  {'期末权益':>12}  {'年化换手':>10}")
+    print("  " + "-" * 60)
     for r in yrows:
         yr = int(r["year"])
+        eq = port_eq.reindex(net_ret.index).loc[net_ret.index.year == yr]
+        eq_val = float(eq.iloc[-1]) if len(eq) > 0 else 0.0
         at = r.get("annualized_turnover")
         at_s = f"{float(at):>10.0%}" if at is not None else f"{'—':>10}"
         print(
             f"  {yr}   {float(r['net_return']):>+10.1%}  "
-            f"{float(r['max_drawdown']):>10.1%}  {at_s}"
+            f"{float(r['max_drawdown']):>10.1%}  "
+            f"¥{eq_val:>10,.0f}  {at_s}"
         )
 
-    total = float((1 + net_ret).prod() - 1)
-    yr0 = min(yearly.keys()) if yearly else int(START[:4])
-    yr1 = max(yearly.keys()) if yearly else int(END[:4])
-    print(f"\n总收益 ({yr0}~{yr1}): {total:+.1%}")
+    yr0 = int(yrows[0]["year"]) if yrows else int(START[:4])
+    yr1 = int(yrows[-1]["year"]) if yrows else int(END[:4])
+    print(f"\n总收益 ({yr0}~{yr1}): {total_ret:+.1%}  →  ¥{final_equity:,.0f}")
 
     ann_turn = metrics.get("annualized_turnover", 0) or 0
     print(f"\n成本估算（年换手 {ann_turn:.0%}）:")
@@ -224,7 +216,7 @@ def main():
 
         plot_report(
             net_ret,
-            title=f"A股多因子策略 v4.1  {START[:4]}~{END[:4]}",
+            title=f"A股多因子策略 v4.1  现金仿真  {START[:4]}~{END[:4]}",
             save_path="docs/reports/multifactor_v4.png",
         )
     except Exception as e:

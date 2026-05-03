@@ -14,7 +14,9 @@ import pandas as pd
 
 from strategy.config import (
     W_MA60, W_RSI, W_RET60, W_PB, W_SIZE, W_EP, W_MOM120,
+    W_MOM20, W_SUP_TREND,
     MIN_AMOUNT, FALLEN_KNIFE, VOL_CUTOFF,
+    MAX_UNIT_COST, A_SHARE_LOT,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,12 @@ def build_universe(
     avg_amt = amount.rolling(20, min_periods=10).mean()
     mask = mask & (avg_amt >= MIN_AMOUNT)
     del avg_amt
+    gc.collect()
+
+    # 单只一手成本上限（小资金避免一手占太大比例）
+    unit_cost = close.ffill() * float(A_SHARE_LOT)
+    mask = mask & (unit_cost <= float(MAX_UNIT_COST))
+    del unit_cost
     gc.collect()
 
     # 不低于 52 周最高价的 FALLEN_KNIFE
@@ -137,6 +145,28 @@ def calc_signal(
     gc.collect()
     logger.info("  F7 MOM120 W=%.2f", W_MOM120)
 
+    # F8: 20日短期动量 — 捕捉近期上升趋势
+    mom20 = close / close.shift(20) - 1
+    r8 = mom20.where(universe).rank(axis=1, pct=True).fillna(0.0)
+    signal = signal + W_MOM20 * r8
+    w_total += W_MOM20
+    del mom20, r8
+    gc.collect()
+    logger.info("  F8 MOM20  W=%.2f", W_MOM20)
+
+    # F9: 个股趋势支撑 — 价格站上 MA20 且 MA20 > MA60 得分高
+    ma20_s = close.rolling(20, min_periods=10).mean()
+    ma60_s = close.rolling(60, min_periods=30).mean()
+    above_ma20 = (close > ma20_s).astype(np.float64)
+    ma20_gt_ma60 = (ma20_s > ma60_s).astype(np.float64)
+    trend_raw = (above_ma20 * 0.6 + ma20_gt_ma60 * 0.4)
+    r9 = trend_raw.where(universe).rank(axis=1, pct=True).fillna(0.0)
+    signal = signal + W_SUP_TREND * r9
+    w_total += W_SUP_TREND
+    del ma20_s, ma60_s, above_ma20, ma20_gt_ma60, trend_raw, r9
+    gc.collect()
+    logger.info("  F9 TREND  W=%.2f", W_SUP_TREND)
+
     # F4: P/B 低估值
     if pb is not None:
         pb_al = pb.reindex(index=idx, columns=cols).ffill()
@@ -172,7 +202,7 @@ def calc_signal(
         logger.info("  F6 EP     W=%.2f", W_EP)
 
     # 按行归一化
-    w_eff_sum = wm60 + W_RSI + wret + wmom
+    w_eff_sum = wm60 + W_RSI + wret + wmom + W_MOM20 + W_SUP_TREND
     if pb is not None:
         w_eff_sum = w_eff_sum + W_PB
     if circ_mv is not None:

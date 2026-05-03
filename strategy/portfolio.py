@@ -180,27 +180,6 @@ def generate_weights(
     return weights
 
 
-def _pick_top_for_rebalance(
-    signal: pd.DataFrame,
-    dt: pd.Timestamp,
-    prev_held: set[str],
-    *,
-    top_n: int,
-    inertia: float,
-) -> tuple[list[str], set[str]] | None:
-    """与 ``generate_weights`` 调仓日选股逻辑一致（惯性加分）。"""
-    if dt not in signal.index:
-        return None
-    s = signal.loc[dt].dropna().copy()
-    if len(s) < top_n:
-        return None
-    for c in prev_held:
-        if c in s.index:
-            s[c] += inertia
-    top = s.nlargest(top_n)
-    return list(top.index), set(top.index)
-
-
 # ═══════════════════════════════════════════════════════════
 # 组合收益
 # ═══════════════════════════════════════════════════════════
@@ -340,35 +319,63 @@ def _liquidate_all_limits(
     return sell_gross, net_to_pending, new_pos
 
 
+def _market_regime_fraction(
+    index_close: pd.Series | None,
+    dt: pd.Timestamp,
+    bear_frac: float,
+    neutral_frac: float,
+    bull_frac: float,
+) -> float:
+    """根据 CSI300 趋势判断当日仓位比例（无前瞻）。"""
+    if index_close is None:
+        return bull_frac
+    ic = index_close.loc[:dt]
+    if len(ic) < 60:
+        return neutral_frac
+    ma20 = float(ic.iloc[-20:].mean()) if len(ic) >= 20 else float(ic.mean())
+    ma60 = float(ic.iloc[-60:].mean())
+    last = float(ic.iloc[-2]) if len(ic) >= 2 else float(ic.iloc[-1])
+    if last > ma20 and ma20 > ma60:
+        return bull_frac
+    if last > ma60:
+        return neutral_frac
+    return bear_frac
+
+
 def simulate_cash_account_backtest(
     close: pd.DataFrame,
-    signal: pd.DataFrame,
+    target_weights: pd.DataFrame,
     initial_cash: float,
     *,
-    top_n: int = TOP_N,
-    rebal_freq: int = REBAL_FREQ,
-    inertia: float = INERTIA,
     buy_cost_bps: float | None = None,
     sell_cost_bps: float | None = None,
     slip_buy_bps: float | None = None,
     slip_sell_bps: float | None = None,
 ) -> tuple[pd.Series, pd.Series, pd.DataFrame]:
     """
-    现金账户、多头整手、**无融资**；包含 T+1 交割、调仓拆日、涨跌停简化、滑点/佣金。
-    未模拟：分红送转、配股、T+0 回转、集合竞价、逐笔队列。
+    现金账户整手仿真回测（**无融资**）。
+
+    接受预计算的目标权重（来自 ``generate_weights``，每行之和 ≈ 1.0），
+    在真实本金 + 整手 + T+1 交割 + 涨跌停约束下模拟持仓与成交。
+
+    Parameters
+    ----------
+    close : pd.DataFrame
+        日收盘价，index=日期，columns=股票代码。
+    target_weights : pd.DataFrame
+        预计算的目标权重矩阵，index/columns 与 close 一致。
+    initial_cash : float
+        初始资金（元）。
     """
     sbuy = float(CASH_SLIP_BUY_BPS if slip_buy_bps is None else slip_buy_bps)
     ssell = float(CASH_SLIP_SELL_BPS if slip_sell_bps is None else slip_sell_bps)
     bcb = float(buy_cost_bps if buy_cost_bps is not None else BUY_COST_BPS)
     scb = float(sell_cost_bps if sell_cost_bps is not None else SELL_COST_BPS)
     dates = close.index
-    # MTM 估值用前向填充价格：停牌/缺价时按最后成交价计算市值，
-    # 避免 NaN 导致持仓被零估值再恢复时出现虚假极端收益率。
     close_mtm = close.ffill()
     cash = float(initial_cash)
     pending_settlement = 0.0
     pos: dict[str, int] = {}
-    prev_held: set[str] = set()
     deferred_syms: list[str] | None = None
 
     equity_vals: list[float] = []
@@ -377,6 +384,14 @@ def simulate_cash_account_backtest(
 
     def _equity_now(mtm_r: pd.Series, pend: float) -> float:
         return float(cash + _mtm_positions_cash(pos, mtm_r) + pend)
+
+    # 预计算调仓日：generate_weights ffill 输出，相邻行不同的日期即为调仓日
+    is_rebal_arr = [False] * len(dates)
+    if len(dates) > 0:
+        is_rebal_arr[0] = True
+        for i in range(1, len(dates)):
+            if not target_weights.iloc[i].equals(target_weights.iloc[i - 1]):
+                is_rebal_arr[i] = True
 
     for i, dt in enumerate(dates):
         row = close.loc[dt]
@@ -388,7 +403,7 @@ def simulate_cash_account_backtest(
 
         turn_t = 0.0
 
-        # 执行上一调仓日决定的买入
+        # 执行前一交易日调仓的买入
         if deferred_syms is not None:
             syms = deferred_syms
             deferred_syms = None
@@ -410,8 +425,8 @@ def simulate_cash_account_backtest(
             if eq_before_buy > 1e-9 and bg > 0:
                 turn_t += bg / eq_before_buy
 
-        is_rebal = i % rebal_freq == 0
-        if is_rebal:
+        # 调仓日：卖出全部 → 按目标权重买入
+        if is_rebal_arr[i]:
             eq_before_sell = _equity_now(mtm_row, pending_settlement)
             sg, net_pend, pos = _liquidate_all_limits(
                 pos,
@@ -425,15 +440,9 @@ def simulate_cash_account_backtest(
             if eq_before_sell > 1e-9 and sg > 0:
                 turn_t += sg / eq_before_sell
 
-            picked = _pick_top_for_rebalance(
-                signal, dt, prev_held, top_n=top_n, inertia=inertia
-            )
-            if picked is not None:
-                syms, prev_held = picked
-                deferred_syms = list(syms)
-            else:
-                prev_held = set()
-                deferred_syms = None
+            tw = target_weights.loc[dt]
+            syms = list(tw[tw > 0].index)
+            deferred_syms = syms if syms else None
 
         turn_vals.append(turn_t)
 
@@ -460,14 +469,10 @@ def simulate_cash_account_backtest(
     turnover = pd.Series(turn_vals, index=dates, dtype=np.float64)
     weights_mv = pd.DataFrame(w_rows, index=dates, columns=close.columns).fillna(0.0)
     logger.info(
-        "现金整手(增强): 初始=%.0f 末权益=%.0f 调仓=%d日 买/卖佣%.1f/%.1fbps 滑点买%.1f/卖%.1f",
+        "现金整手仿真: 初始=%.0f 末权益=%.0f 买/卖佣%.1f/%.1fbps 滑点买%.1f/卖%.1f",
         float(initial_cash),
         float(equity_s.iloc[-1]) if len(equity_s) else 0.0,
-        int(rebal_freq),
-        bcb,
-        scb,
-        sbuy,
-        ssell,
+        bcb, scb, sbuy, ssell,
     )
     return raw_ret, turnover, weights_mv
 
