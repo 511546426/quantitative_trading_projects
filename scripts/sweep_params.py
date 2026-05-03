@@ -49,19 +49,55 @@ del pb, pe_ttm, circ_mv, universe; gc.collect()
 print("信号就绪，开始参数扫描...\n")
 
 # ── 参数组合 ──────────────────────────────────────────
+# (TOP_N, REBAL_FREQ, INERTIA, 标签)
 combos = [
-    # (TOP_N, REBAL_FREQ, INERTIA, 标签)
-    (8,  60, 0.35, "N8_R60_I35"),
-    (8,  60, 0.45, "N8_R60_I45"),
-    (10, 60, 0.35, "N10_R60_I35"),
-    (10, 60, 0.45, "N10_R60_I45"),
-    (10, 70, 0.40, "N10_R70_I40"),
-    (12, 60, 0.40, "N12_R60_I40"),
-    (12, 50, 0.40, "N12_R50_I40"),
-    (15, 60, 0.40, "N15_R60_I40"),
-    # 再加一组低换手激进
-    (8,  65, 0.50, "N8_R65_I50"),
-    (10, 65, 0.50, "N10_R65_I50"),
+    # --- 基准对比 ---
+    (10, 80, 0.50, "N10_R80_I50"),
+    # 当前最优
+    # --- N=10: 高 INERTIA + 中频 ---
+    (10, 60, 0.55, "N10_R60_I55"),
+    (10, 60, 0.60, "N10_R60_I60"),
+    (10, 60, 0.65, "N10_R60_I65"),
+    (10, 60, 0.70, "N10_R60_I70"),
+    (10, 70, 0.50, "N10_R70_I50"),
+    (10, 70, 0.55, "N10_R70_I55"),
+    (10, 70, 0.60, "N10_R70_I60"),
+    (10, 70, 0.65, "N10_R70_I65"),
+    (10, 80, 0.55, "N10_R80_I55"),
+    (10, 80, 0.60, "N10_R80_I60"),
+    (10, 80, 0.65, "N10_R80_I65"),
+    (10, 80, 0.70, "N10_R80_I70"),
+    (10, 90, 0.50, "N10_R90_I50"),
+    (10, 90, 0.55, "N10_R90_I55"),
+    (10, 90, 0.60, "N10_R90_I60"),
+    (10, 90, 0.65, "N10_R90_I65"),
+    # --- N=8: 更集中但惯性保留更高 ---
+    (8,  70, 0.50, "N8_R70_I50"),
+    (8,  70, 0.55, "N8_R70_I55"),
+    (8,  70, 0.60, "N8_R70_I60"),
+    (8,  70, 0.65, "N8_R70_I65"),
+    (8,  80, 0.50, "N8_R80_I50"),
+    (8,  80, 0.55, "N8_R80_I55"),
+    (8,  80, 0.60, "N8_R80_I60"),
+    (8,  80, 0.65, "N8_R80_I65"),
+    (8,  90, 0.55, "N8_R90_I55"),
+    (8,  90, 0.60, "N8_R90_I60"),
+    (8,  90, 0.65, "N8_R90_I65"),
+    # --- N=12: 略分散但用高惯性压换手 ---
+    (12, 70, 0.50, "N12_R70_I50"),
+    (12, 70, 0.55, "N12_R70_I55"),
+    (12, 70, 0.60, "N12_R70_I60"),
+    (12, 80, 0.50, "N12_R80_I50"),
+    (12, 80, 0.55, "N12_R80_I55"),
+    (12, 80, 0.60, "N12_R80_I60"),
+    (12, 90, 0.55, "N12_R90_I55"),
+    (12, 90, 0.60, "N12_R90_I60"),
+    # --- N=15: 更分散 ---
+    (15, 70, 0.50, "N15_R70_I50"),
+    (15, 70, 0.55, "N15_R70_I55"),
+    (15, 80, 0.50, "N15_R80_I50"),
+    (15, 80, 0.55, "N15_R80_I55"),
+    (15, 80, 0.60, "N15_R80_I60"),
 ]
 
 results = []
@@ -82,8 +118,13 @@ for top_n, rebal_freq, inertia, label in combos:
 
     print(f"年化={ann_ret*100:.1f}% DD={mdd*100:.1f}% 夏普={sharpe:.2f} 换手={turn*100:.0f}%")
 
-    # 收紧止损试试
-    for sl_name, sl_val, sl_bull_val in [("SL15_25", 0.15, 0.25), ("SL12_20", 0.12, 0.20)]:
+    # 多组止损试试
+    for sl_name, sl_val, sl_bull_val in [
+        ("SL15_25", 0.15, 0.25),
+        ("SL12_20", 0.12, 0.20),
+        ("SL10_18", 0.10, 0.18),
+        ("SL08_15", 0.08, 0.15),
+    ]:
         net_ret_sl2 = apply_portfolio_stop(net_ret, index_close=index_close,
                                            stop_loss=sl_val, stop_loss_bull=sl_bull_val)
         m2 = calc_full_metrics(net_ret_sl2, turnover)
@@ -96,6 +137,7 @@ for top_n, rebal_freq, inertia, label in combos:
             "sharpe_ratio": float(m2.get("sharpe_ratio", 0) or 0),
             "annualized_turnover": float(m2.get("annualized_turnover", 0) or 0),
             "total_return": float(m2.get("total_return", 0) or 0),
+            "calmar_ratio": float(m2.get("calmar_ratio", 0) or 0),
         })
 
 ch.close(); pg.close()
@@ -116,16 +158,54 @@ for i, (_, r) in enumerate(df.iterrows()):
     if r['annualized_return'] >= 0.15:
         print(f"  {'':>73} ← 达标 15%+")
 
+# 复合评分：年化×0.4 + 夏普×0.2 + 卡玛×0.2 + (1-换手/2000)×0.1 + (1+回撤)×0.1
+df['score'] = (
+    df['annualized_return'] * 0.40
+    + df['sharpe_ratio'] * 0.20
+    + df['calmar_ratio'] * 0.20
+    + (1.0 - df['annualized_turnover'] / 20.0).clip(0, 1) * 0.10
+    + (1.0 + df['max_drawdown']).clip(0, 1) * 0.10
+)
+
 # 找出最佳组合
-h = df[df['annualized_return'] >= 0.15].sort_values('sharpe_ratio', ascending=False)
-print("\n" + "=" * 100)
-print("  ✅ 年化 >= 15% 的组合（按夏普排序）")
-print("=" * 100)
+h = df[df['annualized_return'] >= 0.15].sort_values('score', ascending=False)
+print("\n" + "=" * 120)
+print("  ✅ 年化 >= 15% 的组合（按复合评分排序）")
+print("=" * 120)
+print(f"  {'排名':>3}  {'标签':>20}  {'年化收益':>8}  {'回撤':>7}  {'夏普':>5}  {'卡玛':>5}  {'换手':>5}  {'评分':>5}")
+print("  " + "-" * 65)
 if len(h) > 0:
-    for i, (_, r) in enumerate(h.iterrows()):
-        print(f"  {i+1}. {r['label']}: 年化 {r['annualized_return']*100:.1f}%  "
-              f"回撤 {r['max_drawdown']*100:.1f}%  夏普 {r['sharpe_ratio']:.2f}  "
-              f"换手 {r['annualized_turnover']*100:.0f}%")
+    for i, (_, r) in enumerate(h.head(30).iterrows()):
+        print(f"  {i+1:>3}  {r['label']:>20}  {r['annualized_return']*100:>7.1f}%  "
+              f"{r['max_drawdown']*100:>6.1f}%  {r['sharpe_ratio']:>4.2f}  "
+              f"{r['calmar_ratio']:>4.2f}  {r['annualized_turnover']*100:>4.0f}%  "
+              f"{r['score']:>4.3f}")
 else:
     print("  （无组合达到 15% 年化）")
+
+# 低换手 + 高收益
+print("\n" + "=" * 120)
+print("  🔽 换手 < 500% 且 年化 >= 15%（按年化排序）")
+print("=" * 120)
+lo = df[(df['annualized_turnover'] < 5.0) & (df['annualized_return'] >= 0.15)].sort_values('annualized_return', ascending=False)
+if len(lo) > 0:
+    for i, (_, r) in enumerate(lo.head(20).iterrows()):
+        print(f"  {i+1:>3}  {r['label']:>20}  {r['annualized_return']*100:>7.1f}%  "
+              f"{r['max_drawdown']*100:>6.1f}%  夏普 {r['sharpe_ratio']:.2f}  "
+              f"换手 {r['annualized_turnover']*100:.0f}%")
+else:
+    print("  （无组合满足换手<500% 且年化>=15%）")
+
+# 低回撤 + 高收益
+print("\n" + "=" * 120)
+print("  🛡️ 回撤 > -25% 且 年化 >= 15%（按年化排序）")
+print("=" * 120)
+ld = df[(df['max_drawdown'] > -0.25) & (df['annualized_return'] >= 0.15)].sort_values('annualized_return', ascending=False)
+if len(ld) > 0:
+    for i, (_, r) in enumerate(ld.head(20).iterrows()):
+        print(f"  {i+1:>3}  {r['label']:>20}  {r['annualized_return']*100:>7.1f}%  "
+              f"{r['max_drawdown']*100:>6.1f}%  夏普 {r['sharpe_ratio']:.2f}  "
+              f"换手 {r['annualized_turnover']*100:.0f}%")
+else:
+    print("  （无组合满足要求）")
 print()
